@@ -1,11 +1,12 @@
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { clearSession, loadSession, saveSession } from '@/auth/sessionStore';
+import { createSessionMutationQueue, createSessionStore } from '@/auth/sessionStoreCore';
+import * as SecureStore from '@/native/secureStore';
+import { resetVpnProfileCache } from '@/vpn/profile';
 import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
 import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '@/auth/sessionMutationGuard';
 import { isCurrentSessionOperation } from '@/auth/sessionOperationGuard';
-import { createSessionMutationQueue } from '@/auth/sessionStoreCore';
 import { createSessionRestoreRefresh } from '@/auth/sessionRestoreRefresh';
 import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
@@ -13,6 +14,18 @@ import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { errorMessage } from '@/utils/error';
 import { clearGoogleCredentialState } from '@/native/googleAuth';
 import { disconnectVpn } from '@/native/vexVpn';
+
+const sessionStore = createSessionStore(SecureStore);
+export async function loadSession(): Promise<AuthSession | null> {
+  return sessionStore.load();
+}
+export async function saveSession(session: AuthSession): Promise<void> {
+  await sessionStore.save(session);
+}
+export async function clearSession(): Promise<void> {
+  resetVpnProfileCache();
+  await sessionStore.clear();
+}
 
 type SessionContextValue = {
   isLoading: boolean;

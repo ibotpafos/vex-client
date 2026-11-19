@@ -5,7 +5,7 @@ import {
   QueryClientProvider,
   focusManager,
 } from "@tanstack/react-query";
-import { Button, Column, Host, Spacer, Text as UniversalText } from "@expo/ui";
+import { Button, Column, Host, ScrollView, Spacer, Text as UniversalText } from "@expo/ui";
 import * as Notifications from "expo-notifications";
 import { Stack, type ErrorBoundaryProps } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -129,7 +129,7 @@ function ReactQueryAppStateBridge() {
       focusManager.setFocused(status === "active");
     };
 
-    syncFocusState(AppState.currentState);
+    syncFocusState(AppState.currentState as AppStateStatus);
     const subscription = AppState.addEventListener("change", syncFocusState);
     return () => subscription.remove();
   }, []);
@@ -145,24 +145,26 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
     <Host
       colorScheme="dark"
-      seedColor="#22D3EE"
+      seedColor="#43D9E7"
       style={styles.host}
       useViewportSizeMeasurement
     >
-      <Column alignment="center" spacing={14} style={styles.hostContent}>
-        <Spacer flexible />
-        <UniversalText textStyle={styles.errorTitle}>VEX</UniversalText>
-        <UniversalText textStyle={styles.errorMessage}>
-          Не удалось открыть приложение.
-        </UniversalText>
-        {__DEV__ ? (
-          <UniversalText textStyle={styles.errorDetails}>
-            {error.message}
+      <ScrollView>
+        <Column alignment="center" spacing={14} style={styles.hostContent}>
+          <Spacer flexible />
+          <UniversalText textStyle={styles.errorTitle}>VEX</UniversalText>
+          <UniversalText textStyle={styles.errorMessage}>
+            Не удалось открыть приложение.
           </UniversalText>
-        ) : null}
-        <Button label="Повторить" onPress={retry} />
-        <Spacer flexible />
-      </Column>
+          {__DEV__ ? (
+            <UniversalText textStyle={styles.errorDetails}>
+              {error.message}
+            </UniversalText>
+          ) : null}
+          <Button label="Повторить" onPress={retry} />
+          <Spacer flexible />
+        </Column>
+      </ScrollView>
     </Host>
   );
 }
@@ -211,7 +213,7 @@ function BootScreen() {
   return (
     <Host
       colorScheme="dark"
-      seedColor="#22D3EE"
+      seedColor="#43D9E7"
       style={styles.host}
       useViewportSizeMeasurement
     >
@@ -231,11 +233,9 @@ function DeferredStartupOverlays() {
   const [canMount, setCanMount] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(
-      () => setCanMount(true),
-      Platform.OS === "android" ? 3500 : 1500,
-    );
-    return () => clearTimeout(timer);
+    // Показываем оверлеи обновлений сразу после готовности сессии,
+    // не блокируя отрисовку приложения на 3.5 секунды.
+    setCanMount(true);
   }, []);
 
   if (!canMount) {
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   hostContent: {
-    backgroundColor: "#041315",
+    backgroundColor: "#111416",
     flex: 1,
     gap: 16,
     paddingHorizontal: 32,
@@ -266,7 +266,7 @@ const styles = StyleSheet.create({
   bootTitle: {
     color: "#43D9E7",
     fontSize: 34,
-    fontWeight: "900",
+    fontWeight: '600',
   },
   bootMessage: {
     color: "#91A8AC",
@@ -276,12 +276,12 @@ const styles = StyleSheet.create({
   errorTitle: {
     color: "#F4FCFD",
     fontSize: 42,
-    fontWeight: "900",
+    fontWeight: '600',
   },
   errorMessage: {
     color: "#DCECEE",
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: '600',
     textAlign: "center",
   },
   errorDetails: {

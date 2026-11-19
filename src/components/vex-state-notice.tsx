@@ -4,7 +4,6 @@ import { vexTheme } from '@/ui/vex-theme';
 import {
   mobileStateNoticePresentation,
   type MobileNoticeTone,
-  vexMobileSurface,
   vexMobileType,
 } from '@/ui/vex-mobile-visual';
 
@@ -33,10 +32,10 @@ const styles = StyleSheet.create({
     ...vexMobileType.metadata,
   },
   notice: {
-    backgroundColor: vexMobileSurface.grouped,
+    backgroundColor: vexTheme.colors.surface,
     borderLeftWidth: 2,
-    borderRadius: vexTheme.radius.sm,
-    paddingHorizontal: 14,
+    borderRadius: 16,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
 });

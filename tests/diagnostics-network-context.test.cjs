@@ -9,9 +9,23 @@ const root = process.env.CLIENT_PACKAGE_JSON || path.join(__dirname, '..', 'pack
 const ts = createRequire(root)('typescript');
 const sourcePath = process.env.DIAGNOSTICS_SOURCE || path.join(__dirname, '..', 'src', 'diagnostics', 'clientDiagnostics.ts');
 
+function loadProduction(relativePath, dependencies = {}) {
+  const module = { exports: {} };
+  const code = ts.transpileModule(fs.readFileSync(path.join(path.dirname(root), relativePath), 'utf8'), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  vm.runInNewContext(code, {
+    module, exports: module.exports, Error, SyntaxError,
+    require: id => { assert.ok(dependencies[id], `Unexpected import ${id}`); return dependencies[id]; },
+  });
+  return module.exports;
+}
+const apiErrors = loadProduction('src/api/error.ts');
+const { diagnosticFailureSamples } = loadProduction('src/diagnostics/failureSamples.ts', { '../api/error': apiErrors });
+
 // Execute the actual complete module with isolated native/API/storage adapters.
 // No account, device, network, VPN, or production operation is performed.
-function fixture(results) {
+function fixture(results, reportError) {
   let now = 1_000_000;
   let probes = 0;
   const reports = [];
@@ -34,6 +48,8 @@ function fixture(results) {
         if (report.reason === 'network_before_connect' && seedWait) await seedWait;
         return { id: 'fixture-observation' };
       },
+      reportVpnConnect: async () => { throw reportError; },
+      reportVpnDisconnect: async () => { throw reportError; },
     },
     '@/native/appInfo': { getAppInfo: async () => ({ platform: 'android', version: '1.0.64', build: '1006472' }) },
     '@/native/secureStore': {
@@ -51,7 +67,7 @@ function fixture(results) {
       probeNetworkHealth: async () => {
         const result = results[probes++];
         assert.ok(result, 'Unexpected additional network probe');
-        return result;
+        return typeof result === 'function' ? result() : result;
       },
     },
     './networkObservation': pure.exports,
@@ -72,24 +88,43 @@ function fixture(results) {
     module, exports: module.exports,
     require: (id) => { assert.ok(modules[id], `Unexpected import ${id}`); return modules[id]; },
     Date: class extends Date { static now() { return now; } },
+    Error, SyntaxError,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout: (id) => timers.delete(id),
     fetch: () => { throw new Error('Real network forbidden'); },
   }, { filename: sourcePath });
+  function reportFailure(kind) {
+    const failures = loadProduction('src/diagnostics/failureSamples.ts', { '../api/error': apiErrors });
+    const hook = loadProduction('src/vpn/useVpnDiagnostics.ts', {
+      react: { useCallback: callback => callback, useEffect: () => {}, useRef: current => ({ current }) },
+      '@/api/vexApi': modules['@/api/vexApi'],
+      '@/diagnostics/clientDiagnostics': module.exports,
+      '@/diagnostics/failureSamples': failures,
+      '@/screens/home-screen-helpers': { errorMessage: error => error.message, clientDiagnosticsErrorCooldownMs: 60_000 },
+    }).useVpnDiagnostics({
+      session: { accessToken: 'TOKEN', user: { id: 'fixture-user' } },
+      activeProfileDeviceId: 'fixture-device', connectionPhase: 'idle',
+      clientLatencyMs: null, vpnStatus: { state: 'connected' },
+      diagnosticsSnapshotRef: { current: { vpnStatus: { state: 'connected' }, endpoint: 'HOST:443' } },
+      refreshSession: async () => {},
+    });
+    hook[kind === 'connect' ? 'reportVpnConnectEvent' : 'reportVpnDisconnectEvent']({ device: { id: 'fixture-device' } }, 'fixture');
+  }
   return {
     reports,
+    reportFailure,
     capture: (token = 'TOKEN', device = 'fixture-device', isCurrent) => module.exports.prepareClientNetworkDiagnostics(token, device, isCurrent),
     holdSeed: (promise) => { seedWait = promise; },
     expireCapture: () => { for (const callback of [...timers.values()]) callback(); },
-    network: (generation) => { network = { ...network, generation }; },
+    network: (generation = network.generation, networkClass = network.networkClass) => { network = { generation, networkClass }; },
     nativeState: (state) => { nativeState = state; },
     failSeed: () => { failSeed = true; },
     probes: () => probes,
     clock: (value) => { now = value; },
-    upload: (state, handshake, endpoint = 'HOST:443', samples) => module.exports.uploadClientDiagnostics('TOKEN', {
+    upload: (state, handshake, endpoint = 'HOST:443', samples, latencyMs) => module.exports.uploadClientDiagnostics('TOKEN', {
       reason: 'fixture', status: 'ok', endpoint, deviceId: 'fixture-device',
       vpnStatus: { state, latestHandshakeEpochMillis: handshake },
-      samples,
+      samples, latencyMs,
     }),
   };
 }
@@ -282,7 +317,6 @@ test('wall-clock rollback does not keep a future-dated healthy cache', async () 
   assert.equal(f.reports[1].httpsOk, false);
 });
 
-
 test('pre-connect receipt follows unchanged underlay into connected reports', async () => {
   const f = fixture([{ httpsOk: true }]);
   await f.capture();
@@ -315,4 +349,72 @@ test('an existing VPN and offline capture cannot generate or queue an underlay s
   await f.upload('connected', 100);
   assert.equal(f.reports.length, 1);
   assert.equal(f.reports[0].networkObservationId, undefined);
+});
+
+for (const [name, error, expectedClass, expectedStatus] of [
+  ['timeout', new apiErrors.ApiRequestError('normalized message', { code: 'request_timeout' }), 'timeout'],
+  ['network', new apiErrors.ApiRequestError('normalized message', { code: 'network_unavailable' }), 'network'],
+  ['http', new apiErrors.ApiRequestError('normalized message', { status: 503 }), 'http', 503],
+  ['cancelled', Object.assign(new Error('normalized message'), { name: 'AbortError' }), 'cancelled'],
+  ['parse', new SyntaxError('normalized message'), 'response_parse'],
+  ['unknown', new Error('normalized message'), 'unknown'],
+]) {
+  for (const kind of ['connect', 'disconnect']) {
+    test(`${kind} reporting preserves structured ${name} cause in the submitted diagnostic`, async () => {
+      const f = fixture([{ httpsOk: true }], error);
+      f.reportFailure(kind);
+      await new Promise(setImmediate);
+      assert.equal(f.reports.length, 1);
+      assert.equal(f.reports[0].reason, `vpn_${kind}_report_failed`);
+      assert.equal(f.reports[0].samples.diagnostic_error_class, expectedClass);
+      assert.equal(f.reports[0].samples.diagnostic_http_status, expectedStatus);
+    });
+  }
+  test(`explicit ${name} metadata survives conflicting legacy error text`, async () => {
+    const f = fixture([{ httpsOk: true }]);
+    await f.upload('connected', 100, 'HOST:443', {
+      ...diagnosticFailureSamples(error), connect_error: 'Network request failed',
+    });
+    assert.equal(f.reports[0].samples.diagnostic_error_class, expectedClass);
+    assert.equal(f.reports[0].samples.diagnostic_http_status, expectedStatus);
+  });
+}
+
+for (const changedPart of ['generation', 'class']) {
+  test(`a network ${changedPart} handover during a pending probe discards its measurements and cache`, async () => {
+    let finishProbe, startedProbe;
+    const started = new Promise(resolve => { startedProbe = resolve; });
+    const pending = new Promise(resolve => { finishProbe = resolve; });
+    const f = fixture([() => { startedProbe(); return pending; }, { httpsOk: true, endpointLatencyMs: 15 }]);
+    const upload = f.upload('connected', 100, 'HOST:443', undefined, 700);
+    await started;
+    f.network(changedPart === 'generation' ? 'new-underlay-generation' : undefined, changedPart === 'class' ? 'wifi' : undefined);
+    finishProbe({ dnsOk: false, httpsOk: false, endpointLatencyMs: 900 });
+    await upload;
+    assert.equal(f.reports[0].samples.network_probe_invalidated, 'network_changed');
+    assert.equal(Object.keys(f.reports[0].samples.network_probe).length, 0);
+    assert.equal(f.reports[0].networkObservationId, undefined);
+    assert.equal(f.reports[0].dnsOk, true); // Existing boolean API default, unmeasured sample above.
+    assert.equal(f.reports[0].httpsOk, true);
+    assert.equal(f.reports[0].latencyAverageMs, undefined);
+    await f.upload('connected', 100);
+    assert.equal(f.probes(), 2);
+    assert.equal(f.reports[1].samples.network_probe_invalidated, undefined);
+    assert.equal(f.reports[1].samples.network_probe.httpsOk, true);
+    assert.equal(f.reports[1].latencyAverageMs, 15);
+  });
+}
+
+test('a stable network class change with the same generation cannot reuse the previous class probe', async () => {
+  const f = fixture([{ httpsOk: false, endpointLatencyMs: 900 }, { httpsOk: true, endpointLatencyMs: 15 }]);
+  await f.upload('connected', 100);
+  f.network(undefined, 'wifi');
+  await f.upload('connected', 100);
+  assert.equal(f.probes(), 2);
+  assert.equal(f.reports[1].networkClass, 'wifi');
+  assert.equal(f.reports[1].samples.network_probe_invalidated, undefined);
+  assert.equal(f.reports[1].samples.network_probe.httpsOk, true);
+  assert.equal(f.reports[1].latencyAverageMs, 15);
+  await f.upload('connected', 100);
+  assert.equal(f.probes(), 2);
 });

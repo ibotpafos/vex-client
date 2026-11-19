@@ -17,6 +17,11 @@
 # mapping can symbolize a signed release without retaining raw diagnostics.
 -keepattributes SourceFile,LineNumberTable
 
+# gomobile JNI resolves generated class/method names and callback interfaces.
+-keep class go.** { *; }
+-keep class libXray.** { *; }
+-keep,includedescriptorclasses class * implements libXray.DialerController { *; }
+
 # C calls this upcall by GetMethodID("prepare", "(IJI)Z"). R8 cannot see it.
 # https://developer.android.com/topic/performance/app-optimization/keep-rule-examples
 -keep,includedescriptorclasses interface org.amnezia.awg.GoBackend$SocketProtector {

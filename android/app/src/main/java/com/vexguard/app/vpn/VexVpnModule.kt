@@ -23,6 +23,7 @@ import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -39,6 +40,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.net.URL
@@ -46,8 +49,22 @@ import java.security.MessageDigest
 
 class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
   private val controller = WireGuardController(reactContext)
+  private val apiRecoveryTransport = ApiRecoveryTransport { controller.apiRecoveryNetwork() }
+  private val apiMutationTransport = ApiRecoveryTransport(mutationsOnly = true)
+  private val vlessController = VlessVpnController(reactContext)
+  private val engineOperations = Mutex()
+  private val awgIntentPrefs = reactContext.getSharedPreferences("vex_awg_intent", android.content.Context.MODE_PRIVATE)
+  private val engineRevision = VpnEngineRevision(
+    if (awgIntentPrefs.contains("wanted")) awgIntentPrefs.getBoolean("wanted", false) else null,
+    { wanted -> check(awgIntentPrefs.edit().putBoolean("wanted", wanted).commit()) { "VPN intent storage failed." } },
+  )
   private val wireGuardKeyStore = WireGuardKeyStore(reactContext)
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val verificationHandler = Handler(Looper.getMainLooper())
+  private val verificationTimers = VpnVerificationTimers(
+    { task, delayMs -> verificationHandler.postDelayed(task, delayMs) },
+    { task -> verificationHandler.removeCallbacks(task) },
+  )
   private var pendingPermissionPromise: Promise? = null
   private var listenerCount = 0
   private var statusEmitterJob: Job? = null
@@ -63,7 +80,12 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       pendingPermissionPromise = null
 
       if (resultCode == Activity.RESULT_OK) {
-        promise.resolve(true)
+        try {
+          vlessController.authorizeManualConnection()
+          promise.resolve(true)
+        } catch (_: Throwable) {
+          promise.reject("VPN_PERMISSION_STATE_FAILED", "VPN permission state could not be recorded.")
+        }
       } else {
         promise.reject("VPN_PERMISSION_DENIED", "Android VPN permission was denied.")
       }
@@ -77,6 +99,31 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   override fun getName(): String = "VexVpn"
 
+  override fun getConstants(): MutableMap<String, Any> =
+    (super.getConstants() ?: emptyMap()).toMutableMap().apply {
+      this["apiRecoveryHosts"] = ApiRecoveryPolicy.recoveryHosts()
+      this["apiMutationNoReplay"] = true
+      this["apiRecoveryPreservesHttpErrors"] = true
+    }
+
+  @ReactMethod
+  fun requestApiRecovery(id: String, url: String, method: String, headers: ReadableMap,
+                         body: String?, deadlineEpochMillis: Double, promise: Promise) {
+    apiRecoveryTransport.request(id, url, method, headers, body, deadlineEpochMillis, promise)
+  }
+
+  @ReactMethod
+  fun cancelApiRecovery(id: String) { apiRecoveryTransport.cancel(id) }
+
+  @ReactMethod
+  fun requestApiMutation(id: String, url: String, method: String, headers: ReadableMap,
+                         body: String?, deadlineEpochMillis: Double, promise: Promise) {
+    apiMutationTransport.request(id, url, method, headers, body, deadlineEpochMillis, promise)
+  }
+
+  @ReactMethod
+  fun cancelApiMutation(id: String) { apiMutationTransport.cancel(id) }
+
   @ReactMethod
   fun networkObservation(promise: Promise) {
     val result = Arguments.createMap()
@@ -86,14 +133,21 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun needsPermission(promise: Promise) {
-    promise.resolve(controller.needsPermission())
+    // prepare() can change ownership on Android 9. VLESS permission hints and
+    // every automatic status/recovery path use the durable intent instead.
+    promise.resolve(if (vlessController.isSelected()) vlessController.requiresPermissionRequest() else controller.needsPermission())
   }
 
   @ReactMethod
   fun requestPermission(promise: Promise) {
     val intent = VpnService.prepare(reactContext)
     if (intent == null) {
-      promise.resolve(true)
+      try {
+        vlessController.authorizeManualConnection()
+        promise.resolve(true)
+      } catch (_: Throwable) {
+        promise.reject("VPN_PERMISSION_STATE_FAILED", "VPN permission state could not be recorded.")
+      }
       return
     }
 
@@ -152,10 +206,12 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     promise: Promise,
     routingParameters: String? = null,
   ) {
+    val operation = nextEngineRevision(true, promise) ?: return
     val recoveryHandler = Handler(Looper.getMainLooper())
     val settled = java.util.concurrent.atomic.AtomicBoolean(false)
     val hardRecovery = object : Runnable {
       override fun run() {
+        if (operation != engineRevision.get()) return
         if (controller.isNetworkRecoveryPending()) {
           Log.w(TAG, "Delaying VPN connect hard recovery while network recovery is active.")
           recoveryHandler.postDelayed(this, NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS)
@@ -176,13 +232,29 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       onCompletion = { recoveryHandler.removeCallbacks(hardRecovery) },
     ) {
       try {
-        val status = controller.connect(
-          wgQuickConfig,
-          antiLeakEnabled,
-          routeOnlySelectedApplications,
-          selectedApplications,
-          routingParameters,
-        ).toWritableMap()
+        val status = engineOperations.withLock {
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          if (vlessController.isSelected()) {
+            AwgConfigSafety.parseForActivation(wgQuickConfig)
+            vlessController.disconnect(releaseAntiLeak = !antiLeakEnabled)
+            if (antiLeakEnabled && !VexLeakBlockerService.startAndAwait(
+                reactContext, if (routeOnlySelectedApplications) selectedApplications else emptyList())) {
+              throw IllegalStateException("VPN protection could not be retained during engine handover.")
+            }
+          }
+          // Also retire a VLESS attempt queued before its active-engine flag
+          // reached preferences; the operation revision has already replaced it.
+          vlessController.selectAwg()
+          val connected = controller.connect(
+            wgQuickConfig,
+            antiLeakEnabled,
+            routeOnlySelectedApplications,
+            selectedApplications,
+            routingParameters,
+          ).toWritableMap()
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          connected
+        }
         emitVpnStatusChanged(status, force = true)
         if (settled.compareAndSet(false, true)) promise.resolve(status)
       } catch (error: VpnPermissionRequiredException) {
@@ -203,6 +275,43 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun connectVless(
+    xrayConfig: String, antiLeakEnabled: Boolean, routingParameters: String,
+    applications: ReadableArray, selectedOnly: Boolean, promise: Promise,
+  ) {
+    val operation = nextEngineRevision(null, promise) ?: return
+    // Capture before asynchronous work. Revocation/manual reauthorization
+    // rotates this fence, so an already queued recovery cannot adopt it.
+    val authorization = runCatching { vlessController.connectionAuthorization() }.getOrNull()
+    val packages = (0 until applications.size()).mapNotNull { applications.getString(it)?.trim() }
+      .filter { it.isNotEmpty() }.distinct()
+    scope.launch {
+      try {
+        // Validate before stopping AWG or replacing a working VPN capture.
+        VlessRuntimeConfig.admit(xrayConfig, routingParameters)
+        val admitted = VlessApplicationSelection.admit(reactContext, packages, selectedOnly)
+        val status = engineOperations.withLock {
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          val attempt = vlessController.beginConnection(checkNotNull(authorization), antiLeakEnabled)
+          if (!vlessController.isSelected()) controller.disconnect(releaseAntiLeak = !antiLeakEnabled)
+          // A failed retirement may leave AWG active and still needing recovery.
+          check(engineRevision.setAwgWanted(operation, false)) { "VPN operation was superseded." }
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          val connected = vlessController.connect(xrayConfig, antiLeakEnabled, routingParameters, admitted.allowed, selectedOnly, attempt).toVlessWritableMap()
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          connected
+        }
+        emitVpnStatusChanged(status, force = true)
+        promise.resolve(status)
+      } catch (_: Throwable) {
+        // A parser/core exception can quote a credential-bearing config. Keep
+        // this public bridge failure fixed and free of the original exception.
+        rejectVpnError(promise, "VPN_VLESS_CONNECT_FAILED", "VLESS connection failed.", IllegalStateException("VLESS connection failed."))
+      }
+    }
+  }
+
+  @ReactMethod
   fun getInstalledApplications(promise: Promise) {
     scope.launch {
       try {
@@ -216,9 +325,21 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun disconnect(releaseAntiLeak: Boolean, promise: Promise) {
+    // A user stop withdraws recovery intent before waiting for an older command.
+    val operation = nextEngineRevision(if (releaseAntiLeak) false else null, promise) ?: return
+    // Pending VLESS startup may not have changed active_engine yet.
+    vlessController.cancelPendingConnection(releaseAntiLeak)
     val recoveryHandler = Handler(Looper.getMainLooper())
     val hardRecovery = object : Runnable {
       override fun run() {
+        if (operation != engineRevision.get()) return
+        if (vlessController.isSelected()) {
+          // Explicit user release must also release a stuck remote Go core;
+          // killing the React Native process would leave its separate TUN alive.
+          vlessController.forceReleaseWorker()
+          VexLeakBlockerService.stop(reactContext)
+          return
+        }
         if (controller.isNetworkRecoveryPending()) {
           Log.w(TAG, "Delaying VPN disconnect hard recovery while network recovery is active.")
           recoveryHandler.postDelayed(this, NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS)
@@ -236,7 +357,11 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       onCompletion = { recoveryHandler.removeCallbacks(hardRecovery) },
     ) {
       try {
-        val status = controller.disconnect(releaseAntiLeak).toWritableMap()
+        val status = engineOperations.withLock {
+          check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          if (vlessController.isSelected()) vlessController.disconnect(releaseAntiLeak).toVlessWritableMap()
+          else controller.disconnect(releaseAntiLeak).toWritableMap()
+        }
         emitVpnStatusChanged(status, force = true)
         promise.resolve(status)
       } catch (error: Throwable) {
@@ -259,10 +384,24 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  /** Resolve from a Handler even while React Native UI-frame timers are paused. */
+  fun scheduleVerificationTimer(id: String, delayMs: Double, promise: Promise) {
+    if (!verificationTimers.schedule(id, delayMs) { expired -> promise.resolve(expired) }) {
+      promise.reject("VPN_VERIFICATION_TIMER_FAILED", "VPN verification timer is unavailable.")
+    }
+  }
+
+  @ReactMethod
+  /** Cancel only the explicitly owned verification timer. */
+  fun cancelVerificationTimer(id: String) {
+    verificationTimers.cancel(id)
+  }
+
+  @ReactMethod
   fun status(promise: Promise) {
     scope.launch {
       try {
-        val status = controller.status().toWritableMap()
+        val status = currentVpnStatus()
         emitVpnStatusChanged(status)
         promise.resolve(status)
       } catch (error: Throwable) {
@@ -311,13 +450,24 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun generateWireGuardKeyMaterial(promise: Promise) {
+    scope.launch {
+      try {
+        promise.resolve(wireGuardKeyStore.generateAccountKeyPair().toWritableMap())
+      } catch (error: Throwable) {
+        rejectVpnError(promise, "VPN_KEYPAIR_GENERATE_FAILED", "WireGuard keypair generation failed.", error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun replaceWireGuardKeyPair(privateKey: String, publicKey: String, keyEpoch: Double, promise: Promise) {
     try {
       wireGuardKeyStore.replaceKeyPair(
         StoredWireGuardKeyPair(
           privateKey = privateKey.trim(),
           publicKey = publicKey.trim(),
-          keyEpoch = keyEpoch.toInt(),
+          keyEpoch = VpnIdentityNumbers.legacyKeyEpoch(keyEpoch),
         ),
       )
       promise.resolve(true)
@@ -340,7 +490,10 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   fun measureEndpointLatency(endpoint: String, promise: Promise) {
     scope.launch {
       try {
-        promise.resolve(controller.measureEndpointLatency(endpoint))
+        if (vlessController.isSelected()) {
+          val current = vlessController.status()
+          promise.resolve(if (current.optBoolean("verified") && current.has("latencyMs")) current.optDouble("latencyMs") else null)
+        } else promise.resolve(controller.measureEndpointLatency(endpoint))
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_LATENCY_FAILED", "VPN latency check failed.", error)
       }
@@ -354,7 +507,10 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         val event = Arguments.createMap()
         event.putString("source", "android-native")
         event.putString("event", "vpn_status_snapshot")
-        event.putMap("status", controller.status().toWritableMap())
+        event.putMap("status", currentVpnStatus())
+        val identity = Arguments.createMap()
+        controller.peerIdentity().forEach { (key, value) -> identity.putString(key, value) }
+        event.putMap("activePeerIdentity", identity)
         val events = Arguments.createArray()
         events.pushMap(event)
         promise.resolve(events)
@@ -467,9 +623,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   override fun invalidate() {
+    apiRecoveryTransport.close()
+    apiMutationTransport.close()
+    verificationTimers.clear()
     pendingPermissionPromise?.reject("MODULE_INVALIDATED", "VexVpn module was invalidated.")
     pendingPermissionPromise = null
     stopStatusEmitter()
+    vlessController.detach()
     reactContext.removeActivityEventListener(activityEventListener)
     reactContext.removeLifecycleEventListener(this)
     scope.cancel()
@@ -509,7 +669,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       pollVpnStatus(
         shouldContinue = { listenerCount > 0 },
         poll = {
-          val status = controller.status().toWritableMap()
+          val status = currentVpnStatus()
           emitVpnStatusChanged(status)
           statusPollDelayMs(status)
         },
@@ -553,8 +713,34 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     return left.toHashMap() == right.toHashMap()
   }
 
+  private suspend fun currentVpnStatus(): WritableMap =
+    if (vlessController.isSelected()) vlessController.status().toVlessWritableMap()
+    else controller.status().toWritableMap()
+
+  private fun nextEngineRevision(awgWanted: Boolean?, promise: Promise): Long? = try {
+    engineRevision.next(awgWanted)
+  } catch (error: Throwable) {
+    rejectVpnError(promise, "VPN_INTENT_STATE_FAILED", "VPN connection intent could not be recorded.", error)
+    null
+  }
+
+  private fun org.json.JSONObject.toVlessWritableMap(): WritableMap = Arguments.createMap().also { result ->
+    result.putString("transport", "vless")
+    result.putString("state", optString("state", "error"))
+    result.putString("connectionId", optString("connectionId"))
+    result.putBoolean("connectionWanted", optBoolean("connectionWanted"))
+    result.putBoolean("verified", optBoolean("verified"))
+    result.putString("leakProtection", optString("leakProtection", "off"))
+    result.putDouble("rxBytes", 0.0)
+    result.putDouble("txBytes", 0.0)
+    if (has("verificationEpochMillis")) result.putDouble("verificationEpochMillis", optDouble("verificationEpochMillis"))
+    if (has("verificationReason")) result.putString("verificationReason", optString("verificationReason"))
+    if (has("latencyMs")) result.putDouble("latencyMs", optDouble("latencyMs"))
+  }
+
   private fun VpnConnectionState.toWritableMap(): WritableMap {
     val map = Arguments.createMap()
+    map.putBoolean("dataPlaneVerified", false)
     when (this) {
       is VpnConnectionState.Connected -> {
         val hasTunnelActivity = VpnHandshakeVerifier.isVerified(traffic.latestHandshakeEpochMillis)
@@ -563,9 +749,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putDouble("txBytes", traffic.txBytes.toDouble())
         map.putDouble("latestHandshakeEpochMillis", traffic.latestHandshakeEpochMillis.toDouble())
         map.putString("leakProtection", this.leakProtection.wireValue)
-        map.putBoolean("verified", hasTunnelActivity)
+        map.putBoolean("dataPlaneVerified", dataPlaneVerified)
+        map.putString("dataPlaneGeneration", dataPlaneGeneration)
+        map.putBoolean("verified", hasTunnelActivity && dataPlaneVerified)
         if (!hasTunnelActivity) {
           map.putString("verificationReason", "handshake_pending")
+        } else if (!dataPlaneVerified) {
+          map.putString("verificationReason", verificationReason ?: "data_plane_pending")
         }
       }
       VpnConnectionState.Disconnected -> {
@@ -595,6 +785,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putString("verificationReason", "handshake_pending")
       }
     }
+    engineRevision.awgWanted()?.let { map.putBoolean("connectionWanted", it) }
     return map
   }
 

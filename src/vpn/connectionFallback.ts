@@ -10,7 +10,7 @@ export class AWG3RecoveryPolicyError extends Error {
 }
 
 export function isAWG3Profile(profile: VpnProfile): boolean {
-  return awg3HeaderProtectionPattern.test(profile.config);
+  return profile.transport !== 'vless' && awg3HeaderProtectionPattern.test(profile.config);
 }
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
@@ -26,7 +26,8 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
   // identify the transport path; generic errors can be entitlement, profile,
   // permission, or local application faults and must stay on the selected
   // location for a clear, recoverable error.
-  return message.includes('handshake') ||
+  return message.includes('vless data-plane') || message.includes('vpn verification') || message.includes('handshake') ||
+    message.includes('vpn traffic verification') ||
     message.includes('vpn backend did not enter the connected state') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||
@@ -39,6 +40,7 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
 }
 
 export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] {
+  if (profile.transport === 'vless') return [profile];
   if (!isAWG3Profile(profile)) {
     throw new AWG3RecoveryPolicyError('VPN recovery requires an AWG3 profile with HeaderProtectionKey.');
   }
@@ -84,7 +86,8 @@ export function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnP
 }
 
 export function profileEndpoint(profile: VpnProfile): string | undefined {
-  return profile.device?.endpoint || configEndpoint(profile.config);
+  // The native backend consumes config; device metadata may predate placement.
+  return configEndpoint(profile.config) || profile.device?.endpoint;
 }
 
 function configEndpoint(config: string): string | undefined {

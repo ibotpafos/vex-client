@@ -83,6 +83,8 @@ jobs:
       - run: npm run check
       - name: Release contract and negative fixtures
         run: python3 -m unittest discover -s tests -p "client_release_test.py" -v
+      - name: Android hosted runner cleanup safety
+        run: python3 -m unittest discover -s tests -p "android_release_runner_test.py" -v
       - name: Validate all release workflows
         run: node tests/client-release-workflow.mjs
   android:
@@ -117,7 +119,7 @@ jobs:
           java-version: "17"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.11"
           cache: false
       - run: npm ci
       - name: Install locked Android SDK
@@ -125,6 +127,8 @@ jobs:
           set -euo pipefail
           bash scripts/install_android_sdk_components.sh
           echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
+      - name: Reserve disk space for Android native compilation
+        run: python3 scripts/prepare_android_release_runner.py --execute
       - name: Build, verify signer and native unit suites
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}

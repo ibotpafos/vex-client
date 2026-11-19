@@ -1,5 +1,5 @@
 import type { VpnLocation } from '@/api/vexApi';
-import { chooseBestVpnLocation, selectableVpnLocations } from '@/vpn/serverSelection';
+import { chooseBestVpnLocation, isSelectableLocation, selectableVpnLocations } from '@/vpn/serverSelection';
 
 export type ServerPickerSource = 'all_locations' | 'carousel';
 
@@ -23,7 +23,7 @@ export function serverPickerRowPresentation(
   const title = ({ DE: 'Германия', FI: 'Финляндия', NL: 'Нидерланды' } as Record<string, string>)[
     location.countryCode.toUpperCase()
   ] ?? location.city;
-  const disabled = context.busy || location.healthyNodes <= 0;
+  const disabled = context.busy || !isSelectableLocation(location);
 
   return {
     accessibilityLabel: [title, latency, context.selected ? 'выбрано' : null]

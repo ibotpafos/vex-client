@@ -31,7 +31,7 @@ async function check({ shouldFail, cancelBeforeStart }) {
   let releasePreference;
   const preference = new Promise((resolve) => { releasePreference = resolve; });
   const context = {
-    Platform: { OS: 'android' },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' },
     isCurrentSessionOperation: () => true,
     autoConnectAttemptedRef: { current: false },
     vpnOperationInFlightRef: { current: false },
@@ -55,6 +55,8 @@ async function check({ shouldFail, cancelBeforeStart }) {
     },
     handleVpnFailure: () => { failureHandled = true; },
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   cleanup = vm.runInNewContext('effect()', context);
   if (cancelBeforeStart) cleanup();
@@ -73,7 +75,7 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
   let releasePreference;
   const preference = deferPreference ? new Promise((resolve) => { releasePreference = resolve; }) : Promise.resolve(true);
   const context = {
-    Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
     isCurrentSessionOperation: () => true,
     vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: cancelWhileConnecting, connectionPhase: cancelWhileConnecting ? 'connecting' : 'connected',
@@ -89,6 +91,8 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
     dynamicRouteRuntime: { clearActive: () => {} }, handleVpnFailure: () => {}, reportVpnDisconnectEvent: () => {},
     playWarningHaptic: () => {}, playMediumImpactHaptic: () => {}, playSuccessHaptic: () => {},
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   vm.runInNewContext('effect()', context); // startup or a pending preference read
   if (connectBeforePower) context.isConnected = true;
@@ -107,7 +111,7 @@ async function checkSupersededAutoConnect(reject) {
   const reached = new Promise(resolve => { entered = resolve; });
   const pending = new Promise((resolve, reject) => { release = resolve; fail = reject; });
   const context = {
-    Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
     isCurrentSessionOperation: () => true,
     vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: false, isConnected: false, session: {}, entitlementState: 'active', hasPaidEntitlement: () => true,
@@ -116,6 +120,8 @@ async function checkSupersededAutoConnect(reject) {
     connectCurrentVpn: value => { options = value; entered(); return pending; },
     handleVpnFailure: () => { failures++; },
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   const cleanup = vm.runInNewContext('effect()', context);
   await reached;

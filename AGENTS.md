@@ -1,9 +1,9 @@
 # Expo documentation when relevant
 
 When changing Expo APIs, SDK configuration, native integration, or SDK migration
-behavior, consult the documentation matching the version in the project
-manifest (the current project baseline is SDK 56):
-https://docs.expo.dev/versions/v56.0.0/.
+behavior, use `dependencies.expo` in `package.json` to select the SDK version.
+For SDK 58, consult [the versioned Expo reference](https://docs.expo.dev/versions/v58.0.0/).
+
 For isolated copy, styling, documentation, routine commands, or native code
 that does not depend on Expo, choose the relevant files, tools, and checks
 without requiring an Expo documentation lookup first.

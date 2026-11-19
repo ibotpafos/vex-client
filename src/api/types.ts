@@ -66,6 +66,7 @@ export type AppRemoteConfig = {
   featureFlags: Record<string, boolean>;
   accountFeatureFlags?: Record<string, boolean>;
   incidentBanner?: string;
+  incidentBannerUnavailable?: boolean;
 };
 
 export type User = {
@@ -110,6 +111,7 @@ export type VpnLocation = {
   priority: number;
   status: string;
   healthyNodes: number;
+  awg3Nodes?: number;
   capabilities: string[];
   endpoint?: string;
   latencyMs?: number;
@@ -165,8 +167,8 @@ export type ClientDiagnosticsReportInput = {
     'reconnect_started' | 'reconnect_succeeded' | 'reconnect_failed' |
     'unexpected_disconnect';
   connectDurationMs?: number;
-  transportFrom?: 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
-  transportTo?: 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  transportFrom?: 'vless' | 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  transportTo?: 'vless' | 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
   sessionUptimeSeconds?: number;
   endpoint?: string;
   observedPublicIp?: string;
@@ -192,6 +194,7 @@ export type PreparedTunnel = {
     deviceLookupMs: number;
     profileRequestMs: number;
     queueWaitMs?: number;
+    routingPolicyMs?: number;
   };
   device: VpnDevice;
   config: string;
@@ -205,6 +208,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  signal?: AbortSignal;
   userId?: string;
   isCurrentSessionOperation?: () => boolean;
   cachedDevice?: VpnDevice;

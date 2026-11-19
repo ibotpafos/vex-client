@@ -1,10 +1,8 @@
 import type { VpnLocation } from '../api/types';
 
-export function isLocationAvailable(location: VpnLocation): boolean {
-  return Number.isFinite(location.healthyNodes) && location.healthyNodes > 0
-    && ['active', 'online', 'healthy', 'degraded'].includes(location.status.trim().toLowerCase())
-    && !['maintenance', 'unavailable', 'retired'].includes(location.availability.trim().toLowerCase());
-}
+import { isSelectableLocation as isLocationAvailable } from '../vpn/serverSelection';
+
+export { isLocationAvailable };
 
 export function availableNodeCountText(count: number): string {
   const lastTwo = count % 100;
@@ -85,6 +83,7 @@ function sameLocationCard(left: VpnLocation, right: VpnLocation | undefined): bo
     && left.priority === right!.priority
     && left.status === right!.status
     && left.healthyNodes === right!.healthyNodes
+    && left.awg3Nodes === right!.awg3Nodes
     && left.endpoint === right!.endpoint
     && leftCapabilities.length === rightCapabilities.length
     && leftCapabilities.every((capability, index) => capability === rightCapabilities[index]);

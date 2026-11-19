@@ -11,6 +11,7 @@ import com.facebook.react.ReactHost
 import com.facebook.react.common.ReleaseLevel
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import com.vexguard.app.vpn.VexVpnPackage
+import com.vexguard.app.vpn.isBootProtectionProcess
 import io.sentry.Sentry
 import io.sentry.android.core.SentryAndroid
 
@@ -33,6 +34,12 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // libXray and AWG each contain a Go runtime. The dedicated VPN process
+    // must not initialize React Native packages, AWG, Expo or crash SDKs.
+    if (com.vexguard.app.vpn.VlessVpnProcess.isVless(this)) return
+    // The direct-boot capture process uses no credential-encrypted app data,
+    // React/Expo initialization, Firebase, or network crash reporting.
+    if (isBootProtectionProcess(this)) return
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {
@@ -45,6 +52,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
+    if (com.vexguard.app.vpn.VlessVpnProcess.isVless(this)) return
     ApplicationLifecycleDispatcher.onConfigurationChanged(this, newConfig)
   }
 

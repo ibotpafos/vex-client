@@ -3,7 +3,7 @@ import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/ve
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
 import { errorMessage } from '@/utils/error';
-import { locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
+import { isSelectableLocation, locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
 
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
@@ -14,12 +14,18 @@ export const nativeHealthFailureThreshold = 2;
 export const nativeReconnectCooldownMs = 120_000;
 export const staleHandshakeReconnectSeconds = 180;
 export const entitlementRefreshMs = 2 * 60_000;
-export const locationRefreshMs = 2 * 60_000;
-export const foregroundLocationProbeMs = 2 * 60_000;
-export const profileRefreshMs = 2 * 60_000;
+export const locationRefreshMs = 60_000;
+export const foregroundLocationProbeMs = 60_000;
+export const profileRefreshMs = 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
-export const connectAttemptTimeoutMs = 25_000;
+export const connectAttemptTimeoutMs = 20_000;
+// Cached and hot profiles can be dead. Waiting the full attempt budget before
+// asking the API for a fresh profile costs the user ~50 s of "connecting";
+// p95 native start is under 1 s, so a short first probe proves the cache.
+export const cachedConnectAttemptTimeoutMs = 3_000;
+// Pre-connect network capture is diagnostic only and must not delay the tunnel.
+export const connectDiagnosticsPrepareTimeoutMs = 400;
 
 
 export type DiagnosticsSnapshotRef = {
@@ -36,6 +42,7 @@ export type DiagnosticsSnapshotRef = {
 
 export type ConnectedVpnAttempt = {
   endpointAttempts: string[];
+  firstAttemptMs: number | null;
   interfaceUpMs: number;
   nativeStartMs: number;
   profile: VpnProfile;
@@ -65,9 +72,15 @@ export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
   return left.state === right.state
     && left.rxBytes === right.rxBytes
     && left.txBytes === right.txBytes
+    && left.transport === right.transport
+    && left.connectionId === right.connectionId
+    && left.connectionWanted === right.connectionWanted
+    && left.verificationEpochMillis === right.verificationEpochMillis
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection
     && left.verified === right.verified
+    && left.dataPlaneVerified === right.dataPlaneVerified
+    && left.dataPlaneGeneration === right.dataPlaneGeneration
     && left.verificationReason === right.verificationReason;
 }
 
@@ -144,13 +157,7 @@ export function serverLocationLabel(location: VpnLocation): string {
 }
 
 export function locationStatusText(location: VpnLocation): string {
-  if (location.status === 'healthy' && location.healthyNodes > 0) {
-    return 'Доступен';
-  }
-  if (location.healthyNodes > 0) {
-    return 'Доступен';
-  }
-  return 'Недоступен';
+  return isSelectableLocation(location) ? 'Доступен' : 'Недоступен';
 }
 
 export function formatBytes(value: number) {

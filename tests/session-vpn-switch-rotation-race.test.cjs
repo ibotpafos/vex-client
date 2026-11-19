@@ -2,30 +2,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const vm = require('node:vm');
 const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
-function policy(file, dependencies = {}) {
-  const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(code, { exports, Error, require: name => {
-    assert.ok(Object.hasOwn(dependencies, name), `unexpected policy import ${name}`);
-    return dependencies[name];
-  } });
-  return exports;
-}
+const { loadModule: policy } = require('./vpn-module-loader.cjs');
 const sessionOperation = policy('src/vpn/sessionOperation.ts');
 const { SessionOperationSupersededError } = sessionOperation;
 const { switchVpnLocation } = policy('src/vpn/serverSwitch.ts', { './sessionOperation': sessionOperation });
-const rotation = policy('src/vpn/devicePskRotation.ts');
+const rotation = policy('src/vpn/devicePskRotation.ts', { './profileNumbers': policy('src/vpn/profileNumbers.ts') });
 const file = 'src/vpn/useVpnConnection.ts';
 const source = fs.readFileSync(path.join(repo, file), 'utf8');
 const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 let switchCallback, rotationEffect;
+const leaseCallbacks = {};
 function visit(node) {
+  if (ts.isVariableDeclaration(node) && ['releaseVpnOperation', 'acquireVpnOperation'].includes(node.name.getText(root))) {
+    leaseCallbacks[node.name.getText(root)] = node.initializer.arguments[0].getText(root);
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(root) === 'switchConnectedVpnLocation') {
     switchCallback = node.initializer.arguments[0].getText(root);
   }
@@ -38,8 +31,18 @@ function visit(node) {
 visit(root);
 assert.ok(switchCallback); assert.ok(rotationEffect);
 function bind(callback, context) {
-  const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(context), code)(...Object.values(context));
+  const compile = (expression, scope) => {
+    const code = ts.transpileModule(`return (${expression});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function(...Object.keys(scope), code)(...Object.values(scope));
+  };
+  if (context.vpnOperationInFlightRef && !context.acquireVpnOperation) {
+    context.vpnOperationRevisionRef ??= { current: 0 };
+    context.vpnMountedRef ??= { current: true };
+    context.reconcileReleasedStatusRef ??= { current: async () => {} };
+    context.releaseVpnOperation ??= compile(leaseCallbacks.releaseVpnOperation, context);
+    context.acquireVpnOperation = compile(leaseCallbacks.acquireVpnOperation, context);
+  }
+  return compile(callback, context);
 }
 function deferred() {
   let resolve, reject;
@@ -65,10 +68,11 @@ function switchHarness(stage, options = {}) {
   const context = {
     session: { accessToken: 'token-A', user: { id: 'A' } }, isCurrentSessionOperation: () => current,
     SessionOperationSupersededError, switchVpnLocation,
+    vpnProfileQueryKey: policy('src/vpn/transport.ts').vpnProfileQueryKey, effectiveRoutingMode: 'full', transport: 'amneziawg',
     isVpnBusy: false, vpnOperationInFlightRef: { current: false },
     selectedLocationId: 'fi', activeProfile: state.activeProfile, vpnStatusRef: { current: connectedStatus },
     queryClient: { getQueryData: () => undefined }, routingMode: 'full',
-    closeRouteOverlay: () => calls.push('close-overlay'),
+    goBackOrHome: () => calls.push('close-overlay'),
     setIsVpnBusy: value => calls.push(`busy:${value}`), setIsServerSwitching: value => calls.push(`switching:${value}`),
     setVpnError: value => calls.push(`error:${value}`),
     isVpnTransportFallbackError: () => !options.rollback,
@@ -98,6 +102,34 @@ function switchHarness(stage, options = {}) {
     },
   };
 }
+
+test('a canceled old server-switch finally cannot release a newer lease in the same login', async () => {
+  const h = switchHarness('connect:de');
+  let reconciliations = 0;
+  const leaseContext = {
+    vpnOperationInFlightRef: h.context.vpnOperationInFlightRef,
+    vpnOperationRevisionRef: {current: 0}, vpnMountedRef: {current: true},
+    reconcileReleasedStatusRef: {current: async () => {reconciliations++;}},
+  };
+  leaseContext.releaseVpnOperation = bind(leaseCallbacks.releaseVpnOperation, leaseContext);
+  const acquire = bind(leaseCallbacks.acquireVpnOperation, leaseContext);
+  const run = bind(switchCallback, {...h.context, acquireVpnOperation: acquire});
+  const pending = run('de');
+  await h.reached.promise;
+  assert.equal(h.context.isCurrentSessionOperation(), true);
+  const releaseNewLease = acquire();
+  const newerStatus = {state: 'connecting', rxBytes: 0, txBytes: 0};
+  h.state.status = newerStatus;
+  h.gate.reject(new SessionOperationSupersededError());
+  await pending;
+  assert.equal(h.context.vpnOperationInFlightRef.current, true, 'the old actual finally must retain the newer lease');
+  assert.equal(reconciliations, 0, 'the old actual finally cannot authorize a fresh status publication');
+  assert.equal(h.state.status, newerStatus, 'the canceled switch cannot admit its old status');
+  assert.equal(h.calls.includes('publish-status'), false);
+  releaseNewLease();
+  assert.equal(h.context.vpnOperationInFlightRef.current, false);
+  assert.equal(reconciliations, 1, 'only the newer lease owner may trigger reconciliation');
+});
 
 for (const [stage, rollback] of [
   ['resolve:de', false], ['connect:de', false], ['persist:de', false],
@@ -158,7 +190,10 @@ function rotationHarness(stage, { type = 'cutover_ready', connected = true } = {
     acknowledgeStagedDevicePSKProfile: () => wait('api-ack'), clearStagedDevicePSKProfile: () => wait('clear'),
     acknowledgeDevicePushEvent: () => wait('native-ack'),
     disconnectVpn: () => wait('disconnect'),
-    connectProfileWithEndpointFallback: value => wait('connect', { profile: value, status: connectedStatus }),
+    connectProfileWithEndpointFallback: async (value, _isCurrent, beforeNativeConnect) => {
+      await beforeNativeConnect?.();
+      return wait('connect', { profile: value, status: connectedStatus });
+    },
     setActiveProfile: value => { calls.push('publish-profile'); state.activeProfile = value; },
     cacheProfile: () => calls.push('cache'), setVpnStatus: () => calls.push('publish-status'),
     reportVpnConnectEvent: () => calls.push('report-connect'),

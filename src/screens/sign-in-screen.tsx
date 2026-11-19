@@ -1,3 +1,5 @@
+import { defaultMinSize } from '@expo/ui/jetpack-compose/modifiers';
+import { vexTheme } from '@/ui/vex-theme';
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Button,
@@ -20,17 +22,16 @@ import {
   requestEmailOTP,
   confirmEmailOTP,
   exchangeAppAuthCode,
-  vexApiBaseUrl,
 } from "@/api/vexApi";
+import { validatedApiBaseUrl } from "@/api/config";
 import { signInWithGoogleAndroid, isGoogleSignInCancelled } from "@/native/googleAuth";
-import { useSession } from "@/auth/session-context";
+import { loadSession, useSession } from "@/auth/session-context";
 import {
   authCallbackAttemptKey,
   getOrCreateAuthCallbackAttempt,
   resolveAuthCallbackExchange,
   type AuthCallbackAttempt,
 } from "@/auth/callbackParams";
-import { loadSession } from "@/auth/sessionStore";
 import { loadSessionWithRetry, loadWithRetry } from "@/auth/sessionLoadRetry";
 import {
   authenticateWithBiometrics,
@@ -103,7 +104,7 @@ export default function SignInScreen() {
       if (handledCallbackUrls.current.has(url)) return;
       handledCallbackUrls.current.add(url);
 
-      console.log("Received auth callback");
+      if (__DEV__) console.log("Received auth callback");
       playLightImpactHaptic();
       setIsAuthBusy(true);
       setAuthError(null);
@@ -231,6 +232,7 @@ export default function SignInScreen() {
     setAuthError(null);
 
     try {
+      const baseUrl = validatedApiBaseUrl().toString();
       const verifier = generateRandomString(64);
       const challenge = await generateChallenge(verifier);
       const state = generateRandomString(16);
@@ -242,7 +244,7 @@ export default function SignInScreen() {
       const { platform, deviceName } = getDeviceDetails();
 
       const webAuthUrl = buildAppWebAuthUrl({
-        baseUrl: vexApiBaseUrl,
+        baseUrl,
         challenge,
         deviceId,
         deviceName,
@@ -251,7 +253,7 @@ export default function SignInScreen() {
         provider,
       });
 
-      console.log("Opening Web Auth URL for platform:", platform);
+      if (__DEV__) console.log("Opening Web Auth URL for platform:", platform);
       const callbackUrl = await openWebAuthUrl(webAuthUrl);
       if (isAppAuthCallbackUrl(callbackUrl)) {
         await handleCallbackUrl(callbackUrl);
@@ -471,10 +473,11 @@ export default function SignInScreen() {
   }, [isAuthBusy, queryClient, signIn]);
 
   const sheetTitle = emailOTPChallenge ? "Проверьте почту" : "Войти в VEX";
-  const sheetIntro = "Введите email — пришлём одноразовый код для входа.";
-  const sheetButtonStyle = { width: Math.max(280, width - 40) };
+  const sheetIntro = "Введите email — пришлём одноразовый код.";
+  const sheetButtonStyle = { width: Math.max(0, width - 40), borderRadius: 10 };
+  const sheetButtonModifiers = Platform.OS === "android" ? [defaultMinSize({ minHeight: 48 })] : undefined;
   const emailContent = (
-    <Column spacing={10} style={styles.sheetContent} testID="sign-in-sheet">
+    <Column spacing={12} style={styles.sheetContent} testID="sign-in-sheet">
       <Column spacing={12}>
         <UniversalText textStyle={styles.sheetTitle}>{sheetTitle}</UniversalText>
         {!emailOTPChallenge ? (
@@ -492,7 +495,7 @@ export default function SignInScreen() {
               onChangeText={handleEmailChange}
               onFocus={playSelectionHaptic}
               placeholder="Email"
-              placeholderTextColor="#A7B9BD"
+              placeholderTextColor={vexTheme.colors.textMuted}
               style={styles.emailInput}
               textStyle={styles.emailInputText}
             />
@@ -514,25 +517,25 @@ export default function SignInScreen() {
           disabled={isAuthBusy}
           label={isAuthBusy ? "Подождите…" : emailOTPChallenge ? "Подтвердить" : "Продолжить"}
           onPress={() => { void handleAuthSubmit(); }}
-          style={sheetButtonStyle}
+          style={sheetButtonStyle} modifiers={sheetButtonModifiers}
         />
         {emailOTPChallenge ? (
-          <Button disabled={isAuthBusy} onPress={() => { void handleEmailOTPResend(); }} style={sheetButtonStyle} variant="text">
+          <Button disabled={isAuthBusy} onPress={() => { void handleEmailOTPResend(); }} style={sheetButtonStyle} modifiers={sheetButtonModifiers} variant="text">
             <UniversalText textStyle={styles.secondaryButtonText}>Отправить новый код</UniversalText>
           </Button>
         ) : null}
         {canUseBiometricAuth ? (
-          <Button disabled={isAuthBusy} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined">
+          <Button disabled={isAuthBusy} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} modifiers={sheetButtonModifiers} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>{`Войти по ${biometricAuthLabel}`}</UniversalText>
           </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (
-          <Button disabled={isAuthBusy} onPress={handleGoogleSignIn} style={sheetButtonStyle} variant="outlined">
+          <Button disabled={isAuthBusy} onPress={handleGoogleSignIn} style={sheetButtonStyle} modifiers={sheetButtonModifiers} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>Войти через Google</UniversalText>
           </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (
-          <Button disabled={isAuthBusy} onPress={() => { void handleWebAuthStart(); }} style={sheetButtonStyle} variant="outlined">
+          <Button disabled={isAuthBusy} onPress={() => { void handleWebAuthStart(); }} style={sheetButtonStyle} modifiers={sheetButtonModifiers} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>Войти через сайт</UniversalText>
           </Button>
         ) : null}
@@ -543,7 +546,7 @@ export default function SignInScreen() {
   return (
     <Host
       colorScheme="dark"
-      seedColor="#22D3EE"
+      seedColor={vexTheme.colors.accent}
       style={styles.fullScreenHost}
       useViewportSizeMeasurement
     >
@@ -567,54 +570,54 @@ export default function SignInScreen() {
 
 const styles = {
   error: {
-    color: "#FFB4A8",
+    color: vexTheme.colors.danger,
     fontSize: 14,
     lineHeight: 20,
   },
   emailInput: {
-    backgroundColor: "#0C2023",
-    borderColor: "#42666D",
-    borderRadius: 14,
+    backgroundColor: vexTheme.colors.field,
+    borderColor: vexTheme.colors.lineStrong,
+    borderRadius: 10,
     borderWidth: 1,
     minHeight: 56,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   emailInputText: {
-    color: "#E9F7F8",
+    color: vexTheme.colors.text,
     fontSize: 17,
   },
   emailRecipient: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 16,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   fullScreenHost: {
     flex: 1,
   },
   notice: {
-    color: "#67E8F9",
+    color: vexTheme.colors.accent,
     fontSize: 14,
     lineHeight: 20,
   },
   sheetContent: {
-    backgroundColor: "#041315",
+    backgroundColor: vexTheme.colors.background,
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
   sheetIntro: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 16,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   secondaryButtonText: {
-    color: "#E9F7F8",
+    color: vexTheme.colors.text,
     fontSize: 16,
     fontWeight: "600" as const,
   },
   sheetTitle: {
-    color: "#F1FBFC",
-    fontSize: 30,
-    fontWeight: "800" as const,
+    color: vexTheme.colors.text,
+    fontSize: 28,
+    fontWeight: "600" as const,
   },
 };

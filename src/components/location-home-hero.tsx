@@ -1,13 +1,12 @@
-import { ChevronRight, Power, Settings, Shield } from 'lucide-react-native';
+import { ChevronRight, MapPin, Power, Settings, Shield } from 'lucide-react-native';
 import type { ReactNode } from 'react';
-import React from 'react';
 import {
-  Animated,
+  type Animated,
   ImageBackground,
   type ImageSourcePropType,
-  Platform,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -42,6 +41,7 @@ type LocationHomeHeroProps = {
   onPowerPress: () => void;
   onSettingsPress: () => void;
   powerButtonDisabled: boolean;
+  protocolLabel?: 'AWG' | 'VLESS';
   pulseProgress: Animated.Value;
   selectionMode: ServerSelectionMode;
 };
@@ -57,39 +57,38 @@ export function LocationHomeHero({
   onPowerPress,
   onSettingsPress,
   powerButtonDisabled,
-  pulseProgress,
+  protocolLabel,
   selectionMode,
 }: LocationHomeHeroProps) {
   const safeAreaInsets = useSafeAreaInsets();
+  const { width, height, fontScale } = useWindowDimensions();
+  const largeText = fontScale > 1.3;
+  const compact = height < 600;
+  const availableWidth = Math.max(0, width - (safeAreaInsets.left ?? 0) - (safeAreaInsets.right ?? 0) - 48);
+  const adaptivePower = largeText || availableWidth < 192;
   const presentation = homeConnectionPresentation(connectionPhase);
   const activationPending = connectionPhase === 'connecting' || connectionPhase === 'verifying';
   const powerActionLabel = connectionPhase === 'connecting' ? 'Отменить подключение'
     : activationPending ? presentation.helper : presentation.action;
   const locationCopy = location ? homeLocationCopy(location, latencyText, selectionMode) : null;
   const backgroundSource = locationBackgrounds[homeLocationBackdropKey(location)];
-  const reduceMotion = Platform.OS === 'android';
-  const portalScale = pulseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, presentation.tone === 'connected' ? 1.035 : 1.018],
-  });
-  const portalOpacity = pulseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.86, 1],
-  });
 
   const content = (
     <View
       style={[
         styles.root,
         {
-          paddingBottom: Math.max(safeAreaInsets.bottom, 22),
+          paddingBottom: Math.max(safeAreaInsets.bottom, 24),
           paddingTop: safeAreaInsets.top,
+          paddingLeft: 24 + (safeAreaInsets.left ?? 0),
+          paddingRight: 24 + (safeAreaInsets.right ?? 0),
+          ...(compact ? { minHeight: height } : null),
         },
       ]}
     >
       <View pointerEvents="none" style={styles.photoShade} />
       <View style={styles.header}>
-        <View accessibilityLabel="VEX VPN" pointerEvents="none" style={styles.brand}>
+        <View accessibilityLabel="VEX VPN" pointerEvents="none" style={largeText ? styles.adaptiveBrand : styles.brand}>
           <VexWordmark accessibilityHidden />
           {accountTierLabel ? <Text style={styles.brandTier}>· {accountTierLabel}</Text> : null}
         </View>
@@ -104,18 +103,18 @@ export function LocationHomeHero({
             style={styles.headerButton}
             title="Настройки"
           >
-            <Settings color="#EAF7F8" size={25} strokeWidth={2.15} />
+            <Settings color="#B7C0C3" size={20} strokeWidth={1.75} />
           </VexPressable>
         </View>
       </View>
 
-      <View style={styles.portalStage}>
-        <Animated.View
+      <View style={[styles.portalStage, compact && styles.compactPortalStage]}>
+        <View
           style={[
             styles.portalFrame,
+            adaptivePower && [styles.adaptivePortalFrame, { width: Math.min(320, availableWidth) }],
             presentation.tone === 'connected' && styles.portalFrameConnected,
             presentation.tone === 'warning' && styles.portalFrameWarning,
-            !reduceMotion && { opacity: portalOpacity, transform: [{ scale: portalScale }] },
           ]}
         >
           <VexPressable
@@ -125,23 +124,23 @@ export function LocationHomeHero({
             disabled={powerButtonDisabled}
             hoverStyle={styles.portalPressed}
             onPress={onPowerPress}
-            style={[styles.portalButton, powerButtonDisabled && !activationPending && styles.portalDisabled]}
+            style={[styles.portalButton, adaptivePower && styles.adaptivePortalButton, powerButtonDisabled && !activationPending && styles.portalDisabled]}
             title={powerActionLabel}
           >
             <View pointerEvents="none" style={styles.shieldIcon}>
-              <Shield color="#ECFCFD" size={58} strokeWidth={1.75} />
-              <Power color="#ECFCFD" size={28} strokeWidth={2.1} style={styles.powerIcon} />
+              <Shield color="#43D9E7" size={56} strokeWidth={1.75} />
+              <Power color="#43D9E7" size={24} strokeWidth={1.75} style={styles.powerIcon} />
             </View>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.portalAction}>{presentation.action}</Text>
-            <Text numberOfLines={2} style={styles.portalHelper}>{presentation.helper}</Text>
+            <Text style={styles.portalAction}>{presentation.action}</Text>
+            <Text style={styles.portalHelper}>{presentation.helper}</Text>
           </VexPressable>
-        </Animated.View>
+        </View>
       </View>
 
       <View style={styles.footer}>
         {children ? <View style={styles.notices}>{children}</View> : null}
         <VexPressable
-          accessibilityLabel={locationCopy ? `Выбрать локацию. Сейчас ${locationCopy.city}` : 'Выбрать локацию'}
+          accessibilityLabel={`${locationCopy ? `Выбрать локацию. Сейчас ${locationCopy.city}` : 'Выбрать локацию'}${protocolLabel ? `. Выбранный протокол: ${protocolLabel}` : ''}`}
           accessibilityRole="button"
           disabled={powerButtonDisabled && !location}
           hoverStyle={styles.locationPressed}
@@ -149,15 +148,21 @@ export function LocationHomeHero({
           style={styles.locationButton}
           title="Выбрать локацию"
         >
-          <View style={styles.flagDisc}>
-            <Text style={styles.flag}>{location?.flagEmoji ?? '🌐'}</Text>
+          <View pointerEvents="none" style={styles.locationIcon}>
+            <MapPin color="#B7C0C3" size={20} strokeWidth={1.75} />
           </View>
           <View style={styles.locationCopy}>
             <View style={styles.locationTitleRow}>
-              <Text numberOfLines={1} style={styles.locationTitle}>{locationCopy?.city ?? 'Локация не выбрана'}</Text>
-              <ChevronRight color="#F2F8F8" size={27} strokeWidth={2.1} />
+              <Text style={styles.locationTitle}>{locationCopy?.city ?? 'Локация не выбрана'}</Text>
+              <ChevronRight color="#B7C0C3" size={20} strokeWidth={1.75} />
             </View>
-            <Text numberOfLines={1} style={styles.locationMeta}>{locationCopy?.countryAndLatency ?? 'Выберите доступный сервер'}</Text>
+            <View style={styles.locationMetaRow}>
+              <Text style={styles.locationMeta}>
+                {locationCopy?.countryAndLatency ?? 'Выберите доступный сервер'}
+                {protocolLabel ? ' · ' : ''}
+                {protocolLabel ? <Text testID="home-selected-protocol" style={styles.protocolLabel}>{protocolLabel}</Text> : null}
+              </Text>
+            </View>
           </View>
         </VexPressable>
       </View>
@@ -177,23 +182,22 @@ export function LocationHomeHero({
 
 const styles = StyleSheet.create({
   background: {
-    flex: 1,
+    flexGrow: 1,
     width: '100%',
   },
   fallbackBackground: {
-    backgroundColor: '#06171D',
-    flex: 1,
+    backgroundColor: '#111416',
+    flexGrow: 1,
     width: '100%',
   },
   root: {
-    flex: 1,
+    flexGrow: 1,
     minHeight: 640,
-    overflow: 'hidden',
-    paddingBottom: 22,
+    paddingBottom: 24,
     paddingHorizontal: 24,
   },
   photoShade: {
-    backgroundColor: 'rgba(0, 16, 23, 0.22)',
+    backgroundColor: 'rgba(7, 10, 12, 0.3)',
     bottom: 0,
     left: 0,
     position: 'absolute',
@@ -210,21 +214,28 @@ const styles = StyleSheet.create({
   brand: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
     justifyContent: 'center',
     left: 0,
     position: 'absolute',
     right: 0,
   },
+  adaptiveBrand: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   brandTier: {
-    color: 'rgba(226, 241, 244, 0.74)',
+    color: '#B7C0C3',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   headerActions: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
   },
   headerButton: {
     alignItems: 'center',
@@ -240,48 +251,58 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     minHeight: 280,
-    paddingTop: 38,
+    paddingTop: 40,
+  },
+  compactPortalStage: {
+    minHeight: 216,
+    paddingTop: 0,
+  },
+  adaptivePortalFrame: {
+    borderRadius: 32,
+    height: 'auto',
+    minHeight: 192,
+    padding: 4,
+  },
+  adaptivePortalButton: {
+    borderRadius: 28,
+    height: 'auto',
+    minHeight: 184,
+    paddingVertical: 24,
+    width: '100%',
   },
   portalFrame: {
     alignItems: 'center',
-    backgroundColor: 'rgba(174, 207, 216, 0.26)',
-    borderColor: 'rgba(132, 239, 250, 0.82)',
-    borderRadius: 95,
-    borderWidth: 2,
-    height: 190,
+    backgroundColor: 'rgba(17, 20, 22, 0.96)',
+    borderColor: 'rgba(242, 245, 245, 0.16)',
+    borderRadius: 96,
+    borderWidth: 1,
+    height: 192,
     justifyContent: 'center',
-    shadowColor: '#22D3EE',
-    shadowOffset: { height: 0, width: 0 },
-    shadowOpacity: 0.22,
-    shadowRadius: 18,
-    width: 190,
+    width: 192,
   },
   portalFrameConnected: {
-    backgroundColor: 'rgba(50, 150, 124, 0.27)',
-    borderColor: 'rgba(102, 224, 178, 0.9)',
-    shadowColor: '#55D6A9',
+    borderColor: 'rgba(85, 214, 169, 0.5)',
   },
   portalFrameWarning: {
-    borderColor: 'rgba(243, 201, 105, 0.88)',
-    shadowColor: '#F3C969',
+    borderColor: 'rgba(243, 201, 105, 0.5)',
   },
   portalButton: {
     alignItems: 'center',
-    borderRadius: 91,
-    height: 182,
+    borderRadius: 92,
+    height: 184,
     justifyContent: 'center',
-    paddingHorizontal: 22,
-    width: 182,
+    paddingHorizontal: 24,
+    width: 184,
   },
   portalPressed: {
-    backgroundColor: 'rgba(121, 239, 247, 0.13)',
+    backgroundColor: 'rgba(242, 245, 245, 0.06)',
   },
   portalDisabled: {
     opacity: 0.48,
   },
   shieldIcon: {
     alignItems: 'center',
-    height: 54,
+    height: 56,
     justifyContent: 'center',
     position: 'relative',
     width: 60,
@@ -291,21 +312,21 @@ const styles = StyleSheet.create({
   },
   portalAction: {
     color: '#F4FCFD',
-    fontSize: 19,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '600',
     marginTop: 8,
     textAlign: 'center',
   },
   portalHelper: {
-    color: 'rgba(226, 241, 244, 0.74)',
-    fontSize: 13,
-    lineHeight: 17,
+    color: '#B7C0C3',
+    fontSize: 14,
+    lineHeight: 20,
     marginTop: 4,
     maxWidth: 168,
     textAlign: 'center',
   },
   footer: {
-    gap: 10,
+    gap: 12,
   },
   notices: {
     gap: 8,
@@ -313,28 +334,21 @@ const styles = StyleSheet.create({
   locationButton: {
     alignItems: 'center',
     backgroundColor: 'transparent',
-    borderRadius: 18,
+    borderRadius: 16,
     flexDirection: 'row',
-    gap: 14,
+    gap: 16,
     minHeight: 88,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
   locationPressed: {
-    backgroundColor: 'rgba(10, 43, 52, 0.32)',
+    backgroundColor: 'rgba(17, 20, 22, 0.5)',
   },
-  flagDisc: {
+  locationIcon: {
     alignItems: 'center',
-    backgroundColor: 'rgba(5, 25, 33, 0.7)',
-    borderColor: 'rgba(255,255,255,0.16)',
-    borderRadius: 28,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: 56,
+    height: 48,
     justifyContent: 'center',
-    width: 56,
-  },
-  flag: {
-    fontSize: 31,
+    width: 24,
   },
   locationCopy: {
     flex: 1,
@@ -347,13 +361,27 @@ const styles = StyleSheet.create({
   locationTitle: {
     color: '#F4FCFD',
     flexShrink: 1,
-    fontSize: 25,
-    fontWeight: '600',
-    letterSpacing: -0.35,
+    fontSize: 24,
+    fontWeight: '500',
+  },
+  locationMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    rowGap: 4,
+    marginTop: 4,
   },
   locationMeta: {
-    color: 'rgba(205, 229, 233, 0.78)',
+    color: '#B7C0C3',
+    flexShrink: 1,
     fontSize: 15,
-    marginTop: 3,
+    lineHeight: 20,
+    fontVariant: ['tabular-nums'],
+  },
+  protocolLabel: {
+    color: '#B7C0C3',
+    fontSize: 15,
+    fontWeight: '500',
   },
 });

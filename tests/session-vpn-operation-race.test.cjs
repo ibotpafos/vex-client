@@ -2,21 +2,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const vm = require('node:vm');
 const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
-function policy(file, dependencies = {}, globals = {}) {
-  const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(code, { ...globals, exports, Error, require: name => {
-    assert.ok(Object.hasOwn(dependencies, name), `unexpected policy import ${name}`);
-    return dependencies[name];
-  } });
-  return exports;
-}
+const { loadModule: policy, loadWithBindings, accountFixture } = require('./vpn-module-loader.cjs');
+const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
 function callbacks(file, names) {
   const source = fs.readFileSync(path.join(repo, file), 'utf8');
   const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
@@ -33,12 +23,21 @@ function callbacks(file, names) {
   return found;
 }
 function bind(callback, context) {
-  const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(context), code)(...Object.values(context));
+  const compile = (expression, scope) => {
+    const code = ts.transpileModule(`return (${expression});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function(...Object.keys(scope), code)(...Object.values(scope));
+  };
+  if (context.vpnOperationInFlightRef && !context.acquireVpnOperation) {
+    context.vpnOperationRevisionRef ??= { current: 0 };
+    context.vpnMountedRef ??= { current: true };
+    context.reconcileReleasedStatusRef ??= { current: async () => {} };
+    context.releaseVpnOperation ??= compile(failure.releaseVpnOperation, context);
+    context.acquireVpnOperation = compile(failure.acquireVpnOperation, context);
+  }
+  return compile(callback, context);
 }
 const auth = callbacks('src/auth/session-context.tsx', ['sessionOperationIsCurrent', 'applySignOutState', 'signIn', 'refreshSession']);
-const flow = callbacks('src/vpn/useVpnConnectionFlow.ts', ['requireCurrentSession', 'connectProfileWithEndpointFallback', 'connectCurrentVpn']);
-const failure = callbacks('src/vpn/useVpnConnection.ts', ['handleVpnFailure', 'handlePowerPress']);
+const failure = callbacks('src/vpn/useVpnConnection.ts', ['handleVpnFailure', 'handlePowerPress', 'acquireVpnOperation', 'releaseVpnOperation']);
 const { isCurrentSessionOperation } = policy('src/auth/sessionOperationGuard.ts');
 const { isCurrentSessionMutation } = policy('src/auth/sessionMutationGuard.ts');
 const { createSessionStore, createSessionMutationQueue, sessionKey, sessionHistoryKey } = policy('src/auth/sessionStoreCore.ts');
@@ -46,8 +45,15 @@ const { SessionOperationSupersededError } = policy('src/vpn/sessionOperation.ts'
 const { ApiRequestError } = policy('src/api/error.ts');
 const { createSessionRestoreRefresh } = policy('src/auth/sessionRestoreRefresh.ts');
 const fallback = policy('src/vpn/connectionFallback.ts');
+const { explicitConnectProfileResolutionOptions } = policy('src/vpn/connectFlow.ts', {
+  './profileConsistency': policy('src/vpn/profileConsistency.ts'), './connectionFallback': fallback,
+});
+const scheduleVpnVerificationTimeout = (delayMs, onTimeout) => {
+  const timer = setTimeout(onTimeout, delayMs);
+  return () => clearTimeout(timer);
+};
+const { waitForVerifiedVpnConnection } = policy('src/vpn/connectVerification.ts', {}, { Date, setTimeout, clearTimeout });
 const { cleanupFailedVpnConnection } = policy('src/vpn/failedConnectionCleanup.ts', { './connectionFallback': fallback });
-const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
 function deferred() {
   let resolve, reject;
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -73,11 +79,12 @@ function provider({ clear = async () => {}, disconnect = async () => {}, save = 
     rotateToken: () => { shared.sessionRef.current = { ...shared.sessionRef.current, accessToken: 'token-A-rotated' }; },
   };
 }
+const fixtureAccount = accountFixture();
 const profile = {
-  locationId: 'de', config: '[Interface]\nPrivateKey = fixture-A\nAddress = 10.0.0.2/32\nHeaderProtectionKey = fixture\n[Peer]\nEndpoint = fixture:443',
-  device: { id: 'device-A', assignedIpv4: '10.0.0.2', endpoint: 'fixture:443' },
+  locationId: 'de', config: '[Interface]\nPrivateKey = ' + fixtureAccount.keyPair.privateKey + '\nAddress = 10.0.0.2/32\nHeaderProtectionKey = fixture\n[Peer]\nEndpoint = fixture:443',
+  device: { ...fixtureAccount.device, assignedIpv4: '10.0.0.2', endpoint: 'fixture:443' },
 };
-function connectionHarness(stage, platform = 'android') {
+function connectionHarness(stage, platform = 'android', overrides = {}) {
   const gate = deferred(), reached = deferred();
   const state = { nativeCalls: 0, cleanupCalls: 0, logoutCalls: 0, published: 0, cached: 0, resolutions: 0, nativeOwner: null };
   const wait = async (name, value) => {
@@ -87,14 +94,14 @@ function connectionHarness(stage, platform = 'android') {
   const session = provider({ disconnect: async () => { state.logoutCalls++; state.nativeOwner = null; } });
   const mountedRef = { current: true };
   const isCurrentSessionOperation = session.guard();
-  const requireCurrentSession = bind(flow.requireCurrentSession, {
-    mountedRef, isCurrentSessionOperation, SessionOperationSupersededError,
-  });
+  const admission=accountFixture({platform}).api;
   const context = {
-    Date, Error, requireCurrentSession, isCurrentSessionOperation, SessionOperationSupersededError, session: { accessToken: 'token-A', user: { id: 'A' } },
+    Date, Error, isCurrentSessionOperation, SessionOperationSupersededError, session: { accessToken: 'token-A', user: { id: 'A' } },
     Platform: { OS: platform }, antiLeakEnabled: true,
+    readVpnNetworkObservation: async () => ({ networkClass: 'unknown', generation: '' }),
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,
+    ...admission,
     androidVpnProfileWithinBinderBudget: () => true,
     getVpnApplicationSelection: () => wait('applications', { mode: 'all', packageNames: [] }),
     dynamicRouteRuntime: { prepare: () => wait('route'), attempts: () => [{ profile }], clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {} },
@@ -105,14 +112,17 @@ function connectionHarness(stage, platform = 'android') {
       if (stage === 'fresh-profile') throw new Error('VPN handshake failed');
       return wait('native', { state: 'connected' });
     },
-    connectAttemptTimeoutMs: 100, waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
+    cachedConnectAttemptTimeoutMs: 50, connectAttemptTimeoutMs: 100, connectDiagnosticsPrepareTimeoutMs: 0,
+    isUnverifiedProfileSource: () => false, scheduleVpnVerificationTimeout,
+    waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
     selectedLocationId: stage === 'persist' ? 'previous' : 'de', serverSelectionMode: 'auto', availableLocations: [{ id: 'de' }],
-    chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions: {},
+    chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions,
     resolveConnectableVpnProfile: async () => {
       state.resolutions++;
       return wait(state.resolutions > 1 ? 'fresh-profile' : 'profile', profile);
     },
     isProfileResolutionFallbackError: () => false, resolveProfileOrSkipMissing: resolve => resolve(), connectFreshSameLocationProfile,
+    withProfileRecoveryTransport: operation => operation(),
     cleanupFailedVpnConnection, disconnectVpn: async () => { state.cleanupCalls++; state.nativeOwner = null; },
     setSelectedVpnLocation: location => wait('persist', location), setSelectedLocationId: () => {},
     cacheProfile: () => { state.cached++; }, setActiveProfile: () => { state.published++; }, setVpnStatus: () => {},
@@ -120,10 +130,108 @@ function connectionHarness(stage, platform = 'android') {
     reportVpnConnectEvent: () => {}, vpnConnectTelemetry: () => ({}), vpnConnectTimingSamples: () => ({}),
     vpnStatus: { state: 'disconnected' }, clientLatencyMs: null, errorMessage: error => error.message,
     withLastSuccessfulEndpoint: value => value,
+    ...overrides,
   };
-  context.connectProfileWithEndpointFallback = bind(flow.connectProfileWithEndpointFallback, context);
-  return { state, session, gate, reached, mountedRef, connect: bind(flow.connectCurrentVpn, context) };
+  const hook=loadWithBindings('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',{...context,useRef:current=>current===true?mountedRef:{current},useEffect:()=>{},useCallback:fn=>fn}).useVpnConnectionFlow;
+  return { state, session, gate, reached, mountedRef, connect: hook(context).connectCurrentVpn };
 }
+
+function placementFallbackHarness({ rejectFreshFallback = false, firstConnectSucceeds = false } = {}) {
+  const locations = [{ id: 'nl' }, { id: 'fi' }];
+  const profiles = Object.fromEntries(locations.map(({ id }) => [id, {
+    ...profile, locationId: id, config: profile.config.replace('fixture:443', `${id}.fixture:443`),
+    device: { ...profile.device, nodeId: id, endpoint: `${id}.fixture:443` },
+  }]));
+  const state = { canonicalLocation: 'nl', nativeLocation: null, resolutions: [], nativeAttempts: [] };
+  const harness = connectionHarness(undefined, 'android', {
+    selectedLocationId: 'fi', availableLocations: locations,
+    chooseBestVpnLocation: () => locations[0],
+    profileResolutionOrder: () => locations,
+    dynamicRouteRuntime: {
+      prepare: async () => {}, attempts: candidate => [{ profile: candidate }],
+      clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {},
+    },
+    resolveConnectableVpnProfile: async (id, options) => {
+      state.resolutions.push({ id, options });
+      if (options.forceRefresh) {
+        if (id === 'fi' && rejectFreshFallback) throw new ApiRequestError('profile unavailable', { status: 401 });
+        // The real profile endpoint moves this shared installation's peer.
+        state.canonicalLocation = id;
+      }
+      return { ...profiles[id], source: options.forceRefresh ? 'api' : 'local' };
+    },
+    connectVpn: async config => {
+      const id = config.includes('nl.fixture:443') ? 'nl' : 'fi';
+      state.nativeAttempts.push(id);
+      if (id === 'nl' && !firstConnectSucceeds) throw new Error('VPN handshake failed');
+      // A retained peer can handshake before deferred server cleanup removes it.
+      state.nativeLocation = id;
+      return { state: 'connected', verified: true };
+    },
+  });
+  return { ...harness, placement: state };
+}
+
+test('cross-location fallback confirms shared peer placement before activating a saved profile', async () => {
+  const h = placementFallbackHarness();
+  await h.connect();
+  assert.equal(h.placement.nativeLocation, 'fi');
+  assert.equal(h.placement.canonicalLocation, 'fi', 'a transient handshake must not leave server placement on the failed location');
+  const next = h.placement.resolutions.find(item => item.id === 'fi');
+  assert.equal(next.options.forceRefresh, true);
+  assert.equal(next.options.preferCached, false);
+  assert.equal(next.options.requestPermission, false);
+  assert.deepEqual(h.placement.nativeAttempts, ['nl', 'nl', 'fi']);
+});
+
+test('failed cross-location placement confirmation cannot activate the saved fallback', async () => {
+  const h = placementFallbackHarness({ rejectFreshFallback: true });
+  await assert.rejects(h.connect(), error => error.status === 401);
+  assert.equal(h.placement.nativeLocation, null);
+  assert.deepEqual(h.placement.nativeAttempts, ['nl', 'nl']);
+  assert.equal(h.state.cleanupCalls, 1);
+});
+
+test('successful initial cached connection retains its fast path without another profile request', async () => {
+  const h = placementFallbackHarness({ firstConnectSucceeds: true });
+  await h.connect();
+  assert.equal(h.placement.resolutions.length, 1);
+  const { isCurrentOperation, ...options } = h.placement.resolutions[0].options;
+  assert.equal(typeof isCurrentOperation, 'function');
+  assert.equal(isCurrentOperation(), true);
+  assert.deepEqual(options, {
+    forceRefresh: false, preferCached: true, validateCachedProfile: true, requestPermission: true,
+  });
+  assert.deepEqual(h.placement.nativeAttempts, ['nl']);
+});
+
+test('the actual connect flow advances to a fresh profile after a background verification deadline', async () => {
+  let connects = 0;
+  let scheduled = 0;
+  const scheduler = (delayMs, onTimeout) => {
+    scheduled++;
+    return scheduleVpnVerificationTimeout(delayMs, onTimeout);
+  };
+  const h = connectionHarness('background', 'android', {
+    scheduleVpnVerificationTimeout: scheduler,
+    connectVpn: async () => { connects++; return { state: 'connected', verified: false, dataPlaneGeneration:'fixture-generation' }; },
+    getVpnStatus: async options => {
+      if (!options?.fresh) return { state: 'disconnected' };
+      if (connects === 1) return new Promise(() => {});
+      return { state: 'connected', verified: true, latestHandshakeEpochMillis: Date.now(), dataPlaneVerified:true, dataPlaneGeneration:'fixture-generation' };
+    },
+    waitForVerifiedVpnConnection: (initial, read, options) => {
+      assert.equal(options.scheduleTimeout, scheduler, 'The production flow must supply its native clock');
+      return waitForVerifiedVpnConnection(initial, read, { ...options, timeoutMs: 25, pollMs: 1 });
+    },
+  });
+  await h.connect();
+  assert.equal(connects, 2);
+  assert.equal(h.state.resolutions, 2);
+  assert.equal(h.state.published, 1);
+  assert.equal(h.state.cleanupCalls, 0);
+  assert.ok(scheduled >= 2);
+});
 
 for (const cancel of [false, true]) {
   test(`a policy arriving during the first native attempt preserves relay recovery; cancel=${cancel}`, async () => {
@@ -141,6 +249,7 @@ for (const cancel of [false, true]) {
       isCurrentSessionOperation: () => current, session: { accessToken: 'token-A', user: { id: 'A' } },
       Platform: { OS: 'android' }, antiLeakEnabled: true,
       prepareClientNetworkDiagnostics: async () => {}, withTimeout: operation => operation,
+      ...accountFixture().api,
       vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
       getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
       dynamicRouteRuntime: {
@@ -159,11 +268,14 @@ for (const cancel of [false, true]) {
         }
         return { state: 'connected' };
       },
-      connectAttemptTimeoutMs: 100,
+      cachedConnectAttemptTimeoutMs: 50, connectAttemptTimeoutMs: 100, connectDiagnosticsPrepareTimeoutMs: 0,
+      isUnverifiedProfileSource: () => false,
+      scheduleVpnVerificationTimeout,
       waitForVerifiedVpnConnection: async value => value,
       submitClientDiagnostics: async (_token, report) => { reports.push(report); }, withLastSuccessfulEndpoint: value => value,
     };
-    const pending = bind(flow.connectProfileWithEndpointFallback, context)(profile);
+    const hook=loadWithBindings('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',{...context,useRef:current=>({current}),useEffect:()=>{},useCallback:fn=>fn}).useVpnConnectionFlow;
+    const pending = hook(context).connectProfileWithEndpointFallback(profile);
     if (cancel) {
       await assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
       assert.equal(nativeConfigs.length, 1);

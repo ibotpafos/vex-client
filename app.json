@@ -3,8 +3,8 @@
     "name": "VEX",
     "slug": "vex",
     "scheme": "vexguard",
-    "version": "1.0.73",
-    "orientation": "portrait",
+    "version": "1.0.93",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "assetBundlePatterns": [
@@ -27,9 +27,9 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
+      "predictiveBackGestureEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 1007381,
+      "versionCode": 1009301,
       "package": "com.vexguard.app",
       "intentFilters": [
         {
@@ -100,7 +100,8 @@
         "appVariant": "production",
         "billingFailedUrl": "https://vexguard.app/v1/billing/mobile-return?status=failed",
         "billingReturnUrl": "https://vexguard.app/v1/billing/mobile-return?status=success",
-        "updateChannel": "production"
+        "updateChannel": "production",
+        "apiOrigin": "https://api.vexguard.app"
       },
       "router": {},
       "eas": {

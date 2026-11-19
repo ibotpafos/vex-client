@@ -1,6 +1,11 @@
 import type { VpnStatus } from '@/native/vexVpn';
 
 export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: string): boolean {
+  if (status.transport === 'vless') {
+    return status.state === 'connected' && status.verified === true &&
+      typeof status.connectionId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(status.connectionId) &&
+      typeof status.verificationEpochMillis === 'number' && Number.isFinite(status.verificationEpochMillis) && status.verificationEpochMillis > 0;
+  }
   const hasHandshake = Boolean(
     status.latestHandshakeEpochMillis && status.latestHandshakeEpochMillis > 0,
   );
@@ -12,7 +17,14 @@ export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: str
 
 export function resolveNativeTunnelVerified(status: VpnStatus, platform: string): boolean {
   const hasVerifiedActivity = hasVerifiedNativeTunnelActivity(status, platform);
-  if (platform === 'android' || platform === 'ios') {
+  if (status.transport === 'vless') return hasVerifiedActivity;
+  if (platform === 'android') {
+    // Old Android binaries cannot establish this proof. A signed native update
+    // is required; counters and a legacy `verified` flag must fail closed.
+    return hasVerifiedActivity && status.verified !== false && status.dataPlaneVerified === true &&
+      typeof status.dataPlaneGeneration === 'string' && status.dataPlaneGeneration.length > 0;
+  }
+  if (platform === 'ios') {
     return hasVerifiedActivity;
   }
   return hasVerifiedActivity || status.verified === true;

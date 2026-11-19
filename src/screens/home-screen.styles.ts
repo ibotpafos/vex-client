@@ -45,7 +45,7 @@ export const styles = StyleSheet.create({
   centerStateText: {
     color: vexTheme.colors.textMuted,
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
     marginTop: 16,
   },
   authPanel: {
@@ -72,7 +72,7 @@ export const styles = StyleSheet.create({
   authTitle: {
     color: '#F4FCFD',
     fontSize: 27,
-    fontWeight: '900',
+    fontWeight: '600',
     textAlign: 'center',
   },
   authSubtitle: {
@@ -94,12 +94,12 @@ export const styles = StyleSheet.create({
   authError: {
     color: '#FF7A7A',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
     textAlign: 'center',
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#22D3EE',
+    backgroundColor: '#43D9E7',
     borderRadius: 18,
     justifyContent: 'center',
     minHeight: 56,
@@ -107,7 +107,7 @@ export const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#031012',
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   modeButton: {
     alignItems: 'center',
@@ -115,9 +115,9 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modeButtonText: {
-    color: '#22D3EE',
+    color: '#43D9E7',
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '600',
   },
   hero: {
     alignItems: 'center',
@@ -143,8 +143,8 @@ export const styles = StyleSheet.create({
   },
   heroGlowDesktopStatic: {
     opacity: 0.46,
-    shadowOpacity: 0.26,
-    shadowRadius: 12,
+
+
   },
   heroRing: {
     borderColor: vexTheme.colors.accentLine,
@@ -157,7 +157,7 @@ export const styles = StyleSheet.create({
     width: 184,
   },
   heroRingOuter: {
-    borderColor: 'rgba(121,239,247,0.08)',
+    borderColor: 'rgba(242,245,245,0.08)',
     borderRadius: 110,
     borderWidth: 2,
     height: 210,
@@ -180,8 +180,8 @@ export const styles = StyleSheet.create({
     width: 168,
   },
   powerButtonFrameDesktop: {
-    shadowOpacity: 0.34,
-    shadowRadius: 12,
+
+
   },
   powerButtonFrameActive: {
     backgroundColor: '#0B2423',
@@ -212,7 +212,7 @@ export const styles = StyleSheet.create({
   powerText: {
     color: vexTheme.colors.text,
     fontSize: 28,
-    fontWeight: '900',
+    fontWeight: '600',
     lineHeight: 34,
     marginTop: 5,
     maxWidth: 280,
@@ -222,7 +222,7 @@ export const styles = StyleSheet.create({
   powerSubtext: {
     color: vexTheme.colors.textSecondary,
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '600',
     marginTop: 2,
     textAlign: 'center',
   },
@@ -270,13 +270,13 @@ export const styles = StyleSheet.create({
   serverChipCaption: {
     color: vexTheme.colors.textMuted,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
     marginTop: 3,
   },
   serverChipLabel: {
     color: vexTheme.colors.text,
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '600',
     marginTop: 2,
     minWidth: 0,
   },
@@ -294,7 +294,7 @@ export const styles = StyleSheet.create({
   serverLatencyText: {
     color: vexTheme.colors.accentStrong,
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   locationsSection: {
     gap: vexTheme.spacing.sm,
@@ -313,7 +313,7 @@ export const styles = StyleSheet.create({
   locationsTitle: {
     color: vexTheme.colors.text,
     fontSize: 21,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   locationsAllButton: {
     justifyContent: 'center',
@@ -323,7 +323,7 @@ export const styles = StyleSheet.create({
   locationsAllText: {
     color: vexTheme.colors.accentStrong,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '600',
   },
   serverSelectedIcon: {
     alignItems: 'center',
@@ -359,13 +359,13 @@ export const styles = StyleSheet.create({
   trafficLabel: {
     color: vexTheme.colors.textMuted,
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   trafficValue: {
     color: vexTheme.colors.text,
     fontSize: 18,
     fontVariant: ['tabular-nums'],
-    fontWeight: '900',
+    fontWeight: '600',
     marginTop: 7,
   },
   trafficDirectionIcon: {
@@ -374,7 +374,7 @@ export const styles = StyleSheet.create({
     width: 24,
   },
   heroRingFar: {
-    borderColor: 'rgba(121,239,247,0.07)',
+    borderColor: 'rgba(242,245,245,0.08)',
     borderRadius: 132,
     borderWidth: 1,
     height: 250,
@@ -384,7 +384,7 @@ export const styles = StyleSheet.create({
     width: 250,
   },
   heroRingMid: {
-    borderColor: 'rgba(121,239,247,0.12)',
+    borderColor: 'rgba(242,245,245,0.08)',
     borderRadius: 122,
     borderWidth: 1,
     height: 230,
@@ -412,21 +412,21 @@ export const styles = StyleSheet.create({
     marginBottom: 16,
   },
   serverModalEyebrow: {
-    color: '#22D3EE',
+    color: '#43D9E7',
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: '600',
     letterSpacing: 0,
     marginBottom: 4,
   },
   serverModalTitle: {
     color: '#F4FCFD',
     fontSize: 20,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   serverModalSubtitle: {
     color: '#8FBEC6',
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     lineHeight: 15,
     marginTop: 4,
     maxWidth: 240,
@@ -459,7 +459,7 @@ export const styles = StyleSheet.create({
   },
   serverRowSelected: {
     backgroundColor: 'rgba(34,211,238,0.14)',
-    borderColor: '#22D3EE',
+    borderColor: '#43D9E7',
   },
   serverRowDisabled: {
     opacity: 0.62,
@@ -490,7 +490,7 @@ export const styles = StyleSheet.create({
   serverRowName: {
     color: '#CFE4E8',
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   serverRowNameSelected: {
     color: '#F4FCFD',
@@ -498,7 +498,7 @@ export const styles = StyleSheet.create({
   serverRowStatus: {
     color: '#8FBEC6',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   serverRowStatusLine: {
     alignItems: 'center',
@@ -514,12 +514,12 @@ export const styles = StyleSheet.create({
     width: 8,
   },
   serverHealthDotActive: {
-    backgroundColor: '#22D3EE',
+    backgroundColor: '#43D9E7',
   },
   serverRowLatency: {
     color: '#A7B9BD',
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: '600',
     textAlign: 'right',
   },
   serverRowSide: {
@@ -535,7 +535,7 @@ export const styles = StyleSheet.create({
   serverModalHint: {
     color: '#8FBEC6',
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
     lineHeight: 18,
     paddingBottom: 18,
     textAlign: 'center',
@@ -544,14 +544,14 @@ export const styles = StyleSheet.create({
     alignSelf: 'center',
     color: '#FF9F9F',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
     maxWidth: maxContentWidth - 32,
     textAlign: 'center',
   },
   vpnNoticeText: {
     color: vexTheme.colors.warning,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '600',
     textAlign: 'center',
   },
   rotationNotice: {

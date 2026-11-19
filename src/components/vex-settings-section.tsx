@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type AccessibilityRole, type AccessibilityState
 
 import { vexTheme } from '@/ui/vex-theme';
 import { VexPressable } from '@/ui/vex-ui';
-import { vexMobileSurface, vexMobileType } from '@/ui/vex-mobile-visual';
+import { vexMobileType } from '@/ui/vex-mobile-visual';
 
 export function VexSection({ children, title }: { children: ReactNode; title: string }) {
   return (
@@ -68,33 +68,30 @@ export function VexSettingsRow({
 
 const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 0 },
-  description: { color: vexTheme.colors.textMuted, marginTop: 3, ...vexMobileType.metadata },
+  description: { color: vexTheme.colors.textMuted, marginTop: 4, ...vexMobileType.metadata },
   disabled: { opacity: 0.55 },
-  icon: { alignItems: 'center', justifyContent: 'center', width: 34 },
-  pressed: { backgroundColor: vexMobileSurface.pressed },
+  icon: { alignItems: 'center', justifyContent: 'center', width: 36 },
+  pressed: { backgroundColor: vexTheme.colors.surfaceRaised },
   row: {
     alignItems: 'center',
-    borderBottomColor: vexMobileSurface.divider,
+    borderBottomColor: vexTheme.colors.line,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 12,
     minHeight: 68,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   rowTitle: { color: vexTheme.colors.text, ...vexMobileType.rowTitle },
   section: { gap: 8 },
   sectionTitle: {
     color: vexTheme.colors.textMuted,
     paddingHorizontal: 4,
-    textTransform: 'uppercase',
     ...vexMobileType.sectionTitle,
   },
   surface: {
-    backgroundColor: vexMobileSurface.grouped,
-    borderColor: vexTheme.colors.line,
-    borderRadius: vexTheme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: vexTheme.colors.surface,
+    borderRadius: 16,
     overflow: 'hidden',
   },
   value: { color: vexTheme.colors.accent, marginTop: 4, ...vexMobileType.metadata },

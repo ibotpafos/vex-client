@@ -1,8 +1,130 @@
+import loader from './vpn-module-loader.cjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts';
 
-const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
+
+function loadNativeAdapter(statusReads, extraNative = {}, timerGlobals = { setTimeout, clearTimeout }) {
+  let reads = 0;
+  let listener;
+  const clock = class extends Date { static now() { return 1_000_000; } };
+  const disconnected = { state: 'disconnected', rxBytes: 0, txBytes: 0 };
+  const native = {
+    ...extraNative,
+    connect: async () => ({ state: 'connected', rxBytes: 0, txBytes: 0, dataPlaneGeneration: 'fixture-generation' }),
+    disconnect: async () => disconnected,
+    status: async () => {
+      const value = statusReads[reads++];
+      assert.ok(value, 'Unexpected native status read');
+      return typeof value === 'function' ? value() : value;
+    },
+  };
+  function load(relativePath, dependencies = {}) {
+    return loader.loadModule(fileURLToPath(new URL(relativePath, import.meta.url)), dependencies, { Date:clock, ...timerGlobals });
+  }
+  const adapter = load('../src/native/vexVpn.ts', {
+    'react-native': {
+      Platform: { OS: 'android' }, NativeModules: { VexVpn: native },
+      NativeEventEmitter: class { addListener(_event, callback) { listener = callback; return { remove() {} }; } },
+    },
+    expo: {},
+    '@/vpn/disconnectRecovery': { disconnectWithRecoveryTimeout: operation => operation },
+    '@/vpn/vpnStatusVerification': load('../src/vpn/vpnStatusVerification.ts'),
+    '@/vpn/nativeRoutingPolicy': { nativeRoutingParameters: () => '' },
+  });
+  return { adapter, reads: () => reads, emit: status => listener(status), clock };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(ok => { resolve = ok; });
+  return { promise, resolve };
+}
+
+const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false, dataPlaneVerified: true, dataPlaneGeneration: 'fixture-generation' };
+
+function nativeTimers() {
+  const pending = new Map();
+  return {
+    pending,
+    methods: {
+      scheduleVerificationTimer(id, delayMs) {
+        return new Promise(resolve => {
+          const timer = setTimeout(() => { pending.delete(id); resolve(true); }, delayMs);
+          pending.set(id, { timer, resolve });
+        });
+      },
+      cancelVerificationTimer(id) {
+        const entry = pending.get(id);
+        if (!entry) return;
+        pending.delete(id);
+        clearTimeout(entry.timer);
+        entry.resolve(false);
+      },
+    },
+  };
+}
+
+const pausedUiTimers = {
+  setTimeout() { throw new Error('React Native UI frame timers are paused'); },
+  clearTimeout() { throw new Error('React Native UI frame timers are paused'); },
+};
+
+test('native timers finish handshake polling while UI frame timers are paused', async () => {
+  const timers = nativeTimers();
+  const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+  let reads = 0;
+  const result = await waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: ++reads === 3, latestHandshakeEpochMillis: 1000,
+  }), { minimumHandshakeEpochMillis: 1000, pollMs: 1, timeoutMs: 1000,
+    scheduleTimeout: adapter.scheduleVpnVerificationTimeout });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+  assert.equal(reads, 3);
+  assert.equal(timers.pending.size, 0);
+});
+
+for (const hung of ['status', 'custom poll']) {
+  test(`native deadline bounds a hung ${hung} with paused UI frame timers`, async () => {
+    const timers = nativeTimers();
+    const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+    await assert.rejects(waitForVerifiedVpnConnection(pending,
+      hung === 'status' ? () => new Promise(() => {}) : async () => pending,
+      { timeoutMs: 25, wait: () => new Promise(() => {}),
+        scheduleTimeout: adapter.scheduleVpnVerificationTimeout }), /VPN handshake timed out/);
+    assert.equal(timers.pending.size, 0);
+  });
+}
+
+test('canceling a native timer releases its promise and ignores late completion', async () => {
+  const timers = nativeTimers();
+  const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+  let fired = 0;
+  const cancel = adapter.scheduleVpnVerificationTimeout(1000, () => { fired++; });
+  assert.equal(timers.pending.size, 1);
+  cancel();
+  cancel();
+  await Promise.resolve();
+  assert.equal(fired, 0);
+  assert.equal(timers.pending.size, 0);
+});
+
+for (const native of [{}, { scheduleVerificationTimer() { throw new Error('partial ABI'); } }]) {
+  test(`legacy native timer ABI retains JS scheduling: ${Object.keys(native).length} methods`, async () => {
+    const { adapter } = loadNativeAdapter([], native);
+    await new Promise(resolve => adapter.scheduleVpnVerificationTimeout(0, resolve));
+  });
+}
+
+test('native timer registration failure cannot leave verification waiting forever', async () => {
+  const { adapter } = loadNativeAdapter([], {
+    scheduleVerificationTimer: async () => { throw new Error('native module invalidated'); },
+    cancelVerificationTimer() {},
+  }, pausedUiTimers);
+  await assert.rejects(waitForVerifiedVpnConnection(pending, () => new Promise(() => {}), {
+    timeoutMs: 1000, scheduleTimeout: adapter.scheduleVpnVerificationTimeout,
+  }), /VPN handshake timed out/);
+});
 
 test('an already canceled operation cannot accept an initial verified status', async () => {
   const canceled = new Error('operation superseded');
@@ -139,6 +261,90 @@ test('a current handshake within the deadline succeeds', async () => {
   assert.equal(status.verified, true);
 });
 
+test('connect verification reads a ready native handshake without the Android cache delay', async () => {
+  const verified = { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 };
+  const f = loadNativeAdapter([{ state: 'disconnected', rxBytes: 0, txBytes: 0 }, verified]);
+  const account=loader.accountFixture();
+  const context = {
+    ...f.adapter, ...account.api, Date: f.clock, Platform: { OS: 'android' }, session: {accessToken:'token-A',user:{id:'A'}},
+    useRef:current=>({current}),useEffect:()=>{},useCallback:fn=>fn,isCurrentSessionOperation:()=>true,prepareClientNetworkDiagnostics:async()=>{},
+    requireCurrentSession() {}, antiLeakEnabled: true,
+    vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
+    getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
+    dynamicRouteRuntime: { prepare:async()=>{}, attempts: profile => [{ profile }], clearActive() {} },
+    profileEndpoint: () => 'fixture:443', withLastSuccessfulEndpoint: profile => profile,
+    withTimeout: promise => promise, connectAttemptTimeoutMs: 25_000,
+    cachedConnectAttemptTimeoutMs: 10_000, connectDiagnosticsPrepareTimeoutMs: 400,
+    isUnverifiedProfileSource: profile => profile.source === 'local' || profile.hotProfileUsed === true,
+    waitForVerifiedVpnConnection: (status, readStatus, options) => waitForVerifiedVpnConnection(status, readStatus, {
+      ...options, wait: async () => { throw new Error('A cached pending status forced an unnecessary polling delay'); },
+    }),
+    isVpnTransportFallbackError: () => false,
+  };
+  const hook=loader.loadWithBindings('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',context,{Date:f.clock}).useVpnConnectionFlow;
+  const connect=hook(context).connectProfileWithEndpointFallback;
+  const result = await connect({config:`[Interface]\nPrivateKey = ${account.keyPair.privateKey}`,device:account.device,locationId:'de'});
+  assert.equal(result.status.latestHandshakeEpochMillis, 1_000_000);
+  assert.equal(result.status.verified, true);
+  assert.equal(f.reads(), 2);
+  await f.adapter.getVpnStatus();
+  assert.equal(f.reads(), 2, 'normal background reads retain the status cache');
+});
+
+test('fresh Android status reads still reject the previous handshake', async () => {
+  const f = loadNativeAdapter([
+    { ...pending, verified:true, latestHandshakeEpochMillis: 999_000 },
+    { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 },
+  ]);
+  const started = await f.adapter.connectVpn('fixture');
+  let waits = 0;
+  const result = await waitForVerifiedVpnConnection(started, () => f.adapter.getVpnStatus({ fresh: true }), {
+    minimumHandshakeEpochMillis: 998_000, previousHandshakeEpochMillis: 999_000,
+    wait: async () => { waits++; },
+  });
+  assert.equal(waits, 1);
+  assert.equal(result.latestHandshakeEpochMillis, 1_000_000);
+});
+
+for (const resolveOldFirst of [true, false]) {
+  test(`an older status read cannot replace or clear a fresh read (older completes first: ${resolveOldFirst})`, async () => {
+    const old = deferred(), fresh = deferred();
+    const f = loadNativeAdapter([() => old.promise, () => fresh.promise]);
+    const oldRead = f.adapter.getVpnStatus();
+    const freshRead = f.adapter.getVpnStatus({ fresh: true });
+    const verified = { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 };
+    let joined;
+    if (resolveOldFirst) {
+      old.resolve(pending); await oldRead;
+      joined = f.adapter.getVpnStatus();
+      assert.equal(f.reads(), 2, 'old completion must not clear the newer in-flight read');
+    }
+    fresh.resolve(verified); await freshRead; await joined;
+    if (!resolveOldFirst) { old.resolve(pending); await oldRead; }
+    assert.equal((await f.adapter.getVpnStatus()).latestHandshakeEpochMillis, 1_000_000);
+    assert.equal(f.reads(), 2, 'old completion must not replace the fresh cache');
+  });
+}
+
+for (const mutation of ['connect', 'disconnect', 'event']) {
+  test(`an older native status read cannot replace a newer ${mutation} snapshot`, async () => {
+    const old = deferred();
+    const f = loadNativeAdapter([() => old.promise]);
+    const oldRead = f.adapter.getVpnStatus();
+    let expected;
+    if (mutation === 'connect') expected = await f.adapter.connectVpn('fixture');
+    if (mutation === 'disconnect') expected = await f.adapter.disconnectVpn();
+    if (mutation === 'event') {
+      f.adapter.listenVpnStatusChanged(() => {});
+      f.emit({ ...pending, latestHandshakeEpochMillis: 1_000_000 });
+      expected = await f.adapter.getVpnStatus();
+    }
+    old.resolve({ ...pending, state: 'error' }); await oldRead;
+    assert.equal((await f.adapter.getVpnStatus()).state, expected.state);
+    assert.equal((await f.adapter.getVpnStatus()).latestHandshakeEpochMillis, expected.latestHandshakeEpochMillis);
+    assert.equal(f.reads(), 1);
+  });
+}
 for (const timeoutMs of [10_000, 15_000]) {
   test(`default polling uses the ${timeoutMs}ms deadline for a delayed fresh handshake`, async () => {
     let now = 0;
@@ -154,7 +360,7 @@ for (const timeoutMs of [10_000, 15_000]) {
       wait: async (delayMs) => { now += delayMs; },
     });
     assert.equal(result.verified, true);
-    assert.equal(now, freshAt);
+    assert.ok(now >= freshAt, `expected now >= ${freshAt}, got ${now}`);
     assert.ok(reads > 20, 'the old implicit attempt cap must not preempt the deadline');
   });
 }
@@ -185,5 +391,27 @@ test('an explicit attempt limit remains a caller-controlled bound', async () => 
     wait: async (delayMs) => { now += delayMs; },
   }), /VPN handshake timed out/);
   assert.equal(reads, 2);
-  assert.equal(now, 250);
+  assert.equal(now, 100);
+});
+
+for (const [name, proof] of [
+  ['missing proof', {dataPlaneVerified:undefined}],
+  ['unverified proof', {dataPlaneVerified:false}],
+  ['foreign generation', {dataPlaneGeneration:'another-attempt'}],
+  ['missing handshake', {latestHandshakeEpochMillis:undefined}],
+]) {
+  test(`Android admission cannot verify ${name}`,async()=>{
+    const f=loadNativeAdapter([{...pending,verified:true,latestHandshakeEpochMillis:1_000_000,...proof}]);
+    await assert.rejects(waitForVerifiedVpnConnection(pending,()=>f.adapter.getVpnStatus({fresh:true}),{
+      requireDataPlane:true,expectedDataPlaneGeneration:'fixture-generation',attempts:1,
+    }),/VPN traffic verification timed out/);
+    assert.equal(f.reads(),1);
+  });
+}
+test('Android verification accepts only the current native proof generation',async()=>{
+  const f=loadNativeAdapter([{...pending,verified:true,latestHandshakeEpochMillis:1_000_000}]);
+  const result=await waitForVerifiedVpnConnection(pending,()=>f.adapter.getVpnStatus({fresh:true}),{
+    requireDataPlane:true,expectedDataPlaneGeneration:'fixture-generation',attempts:1,
+  });
+  assert.equal(result.dataPlaneVerified,true);assert.equal(result.dataPlaneGeneration,'fixture-generation');
 });

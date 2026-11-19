@@ -71,7 +71,7 @@ jobs:
           node-version: "22"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.11"
           cache: false
       - run: npm ci
       - name: Check workflow with pinned actionlint
@@ -121,7 +121,7 @@ jobs:
           java-version: "17"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.11"
           cache: false
       - run: npm ci
       - name: Install locked Android build components
@@ -146,12 +146,29 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Detect Android-only native changes
+        id: ios_scope
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          android_changes=$(git diff --name-only --no-renames "$BASE_COMMIT" HEAD -- android/)
+          ios_changes=$(git diff --name-only --no-renames "$BASE_COMMIT" HEAD -- \
+            ios/ ':(glob)**/ios/**' ':(glob)**/*.podspec' \
+            ':(glob)scripts/ios_*' ':(glob)scripts/test_ios_*' ':(glob)scripts/*_ios.sh' \
+            ':(glob)tests/**/*.swift')
+          run_ios=true
+          if [[ -n "$android_changes" && -z "$ios_changes" ]]; then
+            run_ios=false
+          fi
+          echo "run_ios=$run_ios" >> "$GITHUB_OUTPUT"
       - name: Check selected Swift toolchain
         run: swift --version
       - name: Test isolated macOS cancellation and recovery
         run: bash scripts/test_macos_runtime_reliability.sh
       - name: Test isolated iOS tunnel transition ordering
-        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
+        if: (github.event_name == 'workflow_dispatch' && !inputs.skip_ios) || steps.ios_scope.outputs.run_ios == 'true'
         run: |
           bash scripts/test_ios_tunnel_transitions.sh
           ruby -c modules/vex-vpn/ios/VexVpn.podspec
@@ -159,16 +176,16 @@ jobs:
         with:
           node-version: "22"
       - name: Install locked JavaScript dependencies for the iOS app fixture
-        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
+        if: (github.event_name == 'workflow_dispatch' && !inputs.skip_ios) || steps.ios_scope.outputs.run_ios == 'true'
         run: npm ci
       - name: Verify iOS bridge arguments with the installed Expo Swift validator
-        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
+        if: (github.event_name == 'workflow_dispatch' && !inputs.skip_ios) || steps.ios_scope.outputs.run_ios == 'true'
         env:
           VEX_SWIFTC: swiftc
         run: node --test tests/ios-expo-bridge-contract.test.cjs
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.11"
           cache: false
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
@@ -208,7 +225,7 @@ jobs:
       - name: Test all native macOS behavior
         run: swift test --package-path macos-native
       - name: Build the canonical iOS simulator app without signing
-        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
+        if: (github.event_name == 'workflow_dispatch' && !inputs.skip_ios) || steps.ios_scope.outputs.run_ios == 'true'
         timeout-minutes: 40
         # The owned fixture enforces the reviewed tracked lock with --deployment.
         run: bash scripts/test_ios_simulator_build.sh

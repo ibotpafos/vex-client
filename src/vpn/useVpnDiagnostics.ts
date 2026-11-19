@@ -5,7 +5,9 @@ import {
   reportVpnConnect,
   reportVpnDisconnect,
   vpnDeviceUsage,
+  type AuthSession,
   type ClientConnectionTelemetryInput,
+  type Entitlement,
   type VpnDeviceUsage,
 } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
@@ -28,8 +30,8 @@ type UseVpnDiagnosticsInput = {
   vpnStatus: VpnStatus;
   diagnosticsSnapshotRef: React.RefObject<DiagnosticsSnapshotRef>;
   entitlementQueryError: unknown;
-  cachedEntitlement: any;
-  refreshSession: () => Promise<any>;
+  cachedEntitlement: Entitlement | null;
+  refreshSession: () => Promise<AuthSession | null>;
 };
 
 export function useVpnDiagnostics({
@@ -154,6 +156,7 @@ export function useVpnDiagnostics({
     }
     void reportVpnConnect(session.accessToken, profile).catch((error) => {
       void submitClientDiagnosticsEvent('vpn_connect_report_failed', 'error', {
+        ...diagnosticFailureSamples(error),
         error_message: errorMessage(error, 'vpn_connect_report_failed'),
         report_reason: reason,
         report_device_id: profile.device?.id,
@@ -169,6 +172,7 @@ export function useVpnDiagnostics({
     }
     void reportVpnDisconnect(session.accessToken, profile, reason).catch((error) => {
       void submitClientDiagnosticsEvent('vpn_disconnect_report_failed', 'error', {
+        ...diagnosticFailureSamples(error),
         error_message: errorMessage(error, 'vpn_disconnect_report_failed'),
         report_reason: reason,
         report_device_id: profile.device?.id,

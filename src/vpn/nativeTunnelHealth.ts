@@ -2,13 +2,16 @@ import type { VpnDeviceUsage } from '../api/vexApi';
 import type { VpnStatus } from '../native/vexVpn';
 
 export type NativeTunnelHealthReason =
+  | 'vless_data_plane_unverified'
   | 'device_usage_degraded'
   | 'leak_blocking'
   | 'local_status_disconnected'
   | 'local_status_error'
-  | 'stale_local_handshake';
+  | 'stale_local_handshake'
+  | 'data_plane_failed';
 
 export type NativeTunnelHealthInput = {
+  transport?: VpnStatus['transport'];
   deviceUsage?: VpnDeviceUsage;
   nowMs: number;
   staleHandshakeSeconds: number;
@@ -23,12 +26,13 @@ export type NativeTunnelHealthAssessment = {
 export function assessNativeTunnelHealth(input: NativeTunnelHealthInput): NativeTunnelHealthAssessment {
   const reasons: NativeTunnelHealthReason[] = [];
 
+  if (input.transport === 'vless' && input.status?.transport !== 'vless') reasons.push('vless_data_plane_unverified');
   const handshake = input.status?.latestHandshakeEpochMillis ?? 0;
   const freshLocalHandshake = input.status?.state === 'connected' && handshake > 0 && handshake <= input.nowMs &&
     input.nowMs - handshake <= input.staleHandshakeSeconds * 1000;
   // Server usage is sampled asynchronously. Do not tear down a transport with
   // fresh local handshake evidence because an older usage sample says stale.
-  if (!freshLocalHandshake && deviceUsageNeedsReconnect(input.deviceUsage, input.staleHandshakeSeconds)) {
+  if (input.transport !== 'vless' && input.status?.transport !== 'vless' && !freshLocalHandshake && deviceUsageNeedsReconnect(input.deviceUsage, input.staleHandshakeSeconds)) {
     reasons.push('device_usage_degraded');
   }
 
@@ -48,6 +52,9 @@ export function localStatusHealthReasons(
   staleHandshakeSeconds: number,
 ): NativeTunnelHealthReason[] {
   const reasons: NativeTunnelHealthReason[] = [];
+  if (status.dataPlaneVerified === false && ['dns_failed', 'https_failed', 'data_plane_unavailable'].includes(status.verificationReason ?? '')) {
+    reasons.push('data_plane_failed');
+  }
   if (status.leakProtection === 'blocking') {
     reasons.push('leak_blocking');
   }
@@ -55,6 +62,12 @@ export function localStatusHealthReasons(
     reasons.push('local_status_disconnected');
   } else if (status.state === 'error') {
     reasons.push('local_status_error');
+  }
+  if (status.transport === 'vless') {
+    if (['connected', 'degraded', 'verifying'].includes(status.state) && (status.verified !== true || typeof status.connectionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(status.connectionId) ||
+        !status.verificationEpochMillis || status.verificationEpochMillis > nowMs ||
+        nowMs - status.verificationEpochMillis > staleHandshakeSeconds * 1000)) reasons.push('vless_data_plane_unverified');
+    return reasons;
   }
   if (localHandshakeIsStale(status.latestHandshakeEpochMillis, nowMs, staleHandshakeSeconds)) {
     reasons.push('stale_local_handshake');

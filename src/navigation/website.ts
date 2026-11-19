@@ -1,10 +1,10 @@
-const defaultWebsiteBaseUrl = process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app';
+import { validatedApiBaseUrl, vexApiBaseUrl } from '../api/config';
 
-export function vexWebsiteUrl(path: string, baseUrl = defaultWebsiteBaseUrl): string {
+export function vexWebsiteUrl(path: string, baseUrl = vexApiBaseUrl): string {
   if (!path.startsWith('/')) {
     throw new Error('Website path must start with /');
   }
-  const website = new URL(baseUrl);
+  const website = validatedApiBaseUrl(baseUrl);
   const target = new URL(path, website);
   if (target.origin !== website.origin) {
     throw new Error('Website path must stay on the VEX website');

@@ -13,7 +13,10 @@ function check(workflow) {
   for (const [name, job] of Object.entries(workflow.jobs)) {
     for (const step of job.steps) {
       if (step.uses) assert.match(step.uses, /^actions\/[a-z-]+@[0-9a-f]{40}$/);
-      if (step.uses?.startsWith('actions/checkout@')) assert.equal(step.with['persist-credentials'], false);
+      if (step.uses?.startsWith('actions/checkout@')) {
+        assert.equal(step.with['persist-credentials'], false);
+        assert.equal(step.with['fetch-depth'], name === 'prepare' || name === 'macos' ? 0 : 1);
+      }
     }
     if (name === 'android' || name === 'macos') {
       assert.equal(job.environment, 'client-release-signing');
@@ -23,6 +26,10 @@ function check(workflow) {
     }
   }
   assert.ok(workflow.jobs.prepare.steps.some(s => s.run?.includes('"$AUTOPUBLISH_ENABLED" != true')));
+  const qualityCommands = workflow.jobs.quality.steps.flatMap(s => s.run ? [s.run] : []);
+  assert.ok(qualityCommands.includes('npm run check'));
+  assert.ok(qualityCommands.some(run => run.includes('android_release_runner_test.py')));
+  assert.ok(qualityCommands.every(run => !/client_release_test\.py|client-release-workflow\.mjs/.test(run)));
   assert.equal(workflow.jobs.publish.environment, 'client-release-publish');
   assert.equal(workflow.jobs.publish.permissions.contents, 'write');
   assert.ok(workflow.jobs.publish.steps.some(s => s.uses?.startsWith('actions/attest-build-provenance@')));

@@ -375,7 +375,7 @@ gradle.taskGraph.whenReady { graph ->
 
 // One pinned upstream Go runtime is loaded only by the :vless service process.
 // File dependencies carry their producer task, including on a clean CI checkout.
-def xrayAndroidAar = file("${projectRoot}/external/xray/v26.10.31/libXray.aar")
+def xrayAndroidAar = file("${projectRoot}/external/xray/v26.11.9-vex.1/libXray.aar")
 def bootstrapXrayAndroid = tasks.register('bootstrapXrayAndroid', Exec) {
     commandLine 'python3', "${projectRoot}/scripts/bootstrap_xray_android.py"
     inputs.file("${projectRoot}/android/xray-android.lock.json")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch and verify the exact upstream Android library; never builds a Go runtime."""
+"""Fetch and verify the exact Android library archive."""
 import argparse
 import fcntl
 import hashlib
@@ -13,12 +13,12 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "v26.10.31"
-ARCHIVE_SHA256 = "fb99f04acf379cc2957c1e1d0ce2b3c0005d3f49974a44c09a11242a0562c1ca"
-AAR_SHA256 = "4c90532f61ff8363e7fcf52e064ff1aa66d065e06afbadc0ea4c6acf384c452f"
+VERSION = "v26.11.9-vex.1"
+ARCHIVE_SHA256 = "a1b21cecdd76784dcf6b773eabeabb6f73c5b827164a32c36cab3f17eb18a500"
+AAR_SHA256 = "e23274cd660e0fda71d9ac53d14a0c297fb194b0a7b490f2cfef985fef31d680"
 SOURCES_SHA256 = "14641c3977eee0e7ce9c2e1bf2d3399c0158f11a1a500b4ba9b9d5d651c1a9dc"
-ARCHIVE_BYTES = 52277046
-URL = f"https://github.com/XTLS/libXray/releases/download/{VERSION}/libxray-android.zip"
+ARCHIVE_BYTES = 25325325
+URL = "https://github.com/ibotpafos/vex-client/releases/download/libxray-v26.11.9-vex.1/libxray-android-v26.11.9-vex.1.zip"
 
 
 def digest(path):
@@ -73,7 +73,7 @@ def bootstrap(verify_only=False):
         raise ValueError("Android Xray pin differs from the reviewed bootstrap contract")
     default = (Path("/Volumes/D/projects/.dev-cache/vex/releases/vex-client/xray")
                if Path("/Volumes/D/projects").is_dir() else Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "vex/xray")
-    folder = Path(os.environ.get("VEX_XRAY_CACHE_ROOT", str(default))) / VERSION
+    folder = (Path(os.environ.get("VEX_XRAY_CACHE_ROOT", str(default))) / VERSION).resolve()
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / "bootstrap.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

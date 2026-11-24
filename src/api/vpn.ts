@@ -1169,11 +1169,13 @@ export function managedProfileConfig(profile: NativeVPNProfileDTO, keyPair: Wire
   const allowedIps = profile.allowed_ips?.filter(Boolean);
   const amnezia = managedProfileAmneziaConfig(profile.amnezia ?? undefined);
   const presharedKey = profile.preshared_key?.trim();
+  const mtu = profile.mtu;
+  const interfaceMtu = typeof mtu === 'number' && Number.isInteger(mtu) && mtu >= 1280 && mtu <= 65535 ? mtu : 1360;
   return `[Interface]
 PrivateKey = ${keyPair.privateKey}
 Address = ${profile.assigned_ipv4}
 DNS = ${(dns?.length ? dns : ['1.1.1.1', '8.8.8.8']).join(', ')}
-MTU = 1360
+MTU = ${interfaceMtu}
 ${amnezia}
 
 [Peer]

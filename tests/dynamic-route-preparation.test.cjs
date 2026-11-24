@@ -108,6 +108,43 @@ test('a valid persisted policy is ready immediately and makes no HTTP request', 
   assert.equal(f.requests.length, 0);
 });
 
+test('an unexpired policy for a previous placement is refreshed without holding Connect', async () => {
+  const previous = policy('previous-placement');
+  previous.candidates[0].location_id = 'previous';
+  const f = fixture();
+  await f.runtime.prepare('owner', 'token');
+  assert.equal(f.requests.length, 1);
+
+  let prepared = false;
+  void f.runtime.prepare('owner', 'token', undefined, profile).then(() => { prepared = true; });
+  await tick();
+  assert.equal(prepared, true, 'Connect must not wait for a policy refresh');
+  assert.equal(f.requests.length, 1, 'Share the in-flight warmup');
+
+  f.requests[0].resolve(previous);
+  await tick();
+  assert.equal(f.requests.length, 2, 'Refresh promptly for the newly issued placement');
+  f.requests[1].resolve(policy('new-placement'));
+  await tick();
+  assert.equal(f.routeIds(), 'new-placement');
+  await f.runtime.prepare('owner', 'token', undefined, profile);
+  assert.equal(f.requests.length, 2, 'Do not refetch matching candidates');
+});
+
+test('the active placement can renew routes before their hard expiry', async () => {
+  const expires = now + 120_000;
+  const f = fixture(saved('owner', policy('cached', expires)));
+  await f.runtime.prepare('owner', 'token', undefined, profile);
+  assert.equal(f.requests.length, 0);
+  f.clock(expires - 55_000);
+  await f.runtime.prepare('owner', 'token', undefined, profile);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.routeIds(), 'cached', 'Keep the existing candidates usable during renewal');
+  f.requests[0].resolve(policy('renewed', expires + 120_000));
+  await tick();
+  assert.equal(f.routeIds(), 'renewed');
+});
+
 test('foreground and Connect share cache hydration before considering a fetch', async () => {
   const f = fixture();
   const read = f.holdRead();

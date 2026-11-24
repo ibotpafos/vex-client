@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.93",
+    "version": "1.0.94",
     "build": 1,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Сократили тексты на экранах и в настройках. VLESS скрыт, когда нет доступных серверов. Улучшено восстановление VPN. Для перехода на Expo SDK 58 нужно установить APK.",
+    "release_notes": "Улучшили работу управляемых VPN-профилей: приложение учитывает MTU сервера и обновляет резервные маршруты Android при продлении профиля.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

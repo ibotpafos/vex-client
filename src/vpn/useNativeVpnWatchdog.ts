@@ -57,6 +57,7 @@ type NativeVpnWatchdogInput = {
   rotateProfile?: RecoverVpnConnectionInput['rotateProfile'];
   serverSelectionMode?: string;
   sessionAccessToken?: string;
+  sessionUserId?: string;
   setCachedProfile: RecoverVpnConnectionInput['setCachedProfile'];
   staleHandshakeSeconds: number;
   submitDiagnostics: (
@@ -199,6 +200,12 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         });
         backendHealthFailuresRef.current = health.healthy ? 0 : backendHealthFailuresRef.current + 1;
         if (health.healthy && localHealthFailuresRef.current === 0) {
+          // Renew before the tunnel fails, when the API is still reachable.
+          if (Platform.OS === 'android' && activeProfile.transport !== 'vless' &&
+              localStatus?.state === 'connected' && input.sessionUserId) {
+            void dynamicRouteRuntime.prepare(input.sessionUserId, accessToken, input.isCurrentSessionOperation, activeProfile)
+              .catch(() => undefined);
+          }
           recoveryBackoffRef.current = resetRecoveryBackoff();
           const failure = lastRecoveryFailureRef.current;
           if (failure && input.onHealthRecovered && (activeProfile.transport === 'vless' || input.probeHealth) &&

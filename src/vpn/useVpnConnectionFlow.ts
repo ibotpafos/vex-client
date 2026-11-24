@@ -191,7 +191,7 @@ export function useVpnConnectionFlow({
     if (profile.transport !== 'vless' && Platform.OS === 'android' && session?.user.id && session.accessToken) {
       // Route policy is optional background data: the direct endpoint always
       // works. Start preparation and continue connecting immediately.
-      void dynamicRouteRuntime.prepare(session.user.id, session.accessToken, isCurrentSessionOperation);
+      void dynamicRouteRuntime.prepare(session.user.id, session.accessToken, isCurrentSessionOperation, profile);
     }
     const attempts: DynamicRouteAttempt[] = profile.transport === 'vless' ? [{ profile }] : Platform.OS === 'android'
       ? dynamicRouteRuntime.attempts(profile)

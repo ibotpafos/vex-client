@@ -13,7 +13,7 @@ const callbackSource = stripTypeScriptTypes(connection.slice(callbackStart, call
 const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 
 function harness() {
-  const state = {healthy: false, error: null, cleared: [], recoveryAttempts: 0,
+  const state = {healthy: false, error: null, cleared: [], recoveryAttempts: 0, policyPreparations: [],
     probe: async () => ({httpsOk: false, dnsOk: false})};
   let interval, cleanup, cursor = 0;
   const slots = [];
@@ -26,7 +26,7 @@ function harness() {
     useEffect: f => { cleanup?.(); cleanup = f(); },
     Platform: {OS: 'android'}, errorMessage: String,
     setInterval: f => { interval = f; return 0; }, clearInterval: () => {},
-    dynamicRouteRuntime: {recordActiveFailure: () => null}, routeTransport: () => 'awg3_direct',
+    dynamicRouteRuntime: {recordActiveFailure: () => null, prepare: async (...args) => { state.policyPreparations.push(args); }}, routeTransport: () => 'awg3_direct',
     localStatusHealthReasons: status => status.state === 'connected' && status.leakProtection !== 'blocking' ? [] : ['local_status_error'],
     vpnUnexpectedDisconnectTelemetry: () => null, vpnTransportTelemetry: () => ({}),
     assessNativeTunnelHealth: () => ({healthy: state.healthy, reasons: state.healthy ? [] : ['stale']}),
@@ -103,4 +103,22 @@ test('an in-flight recovery probe yields to disposal, a user operation or a late
     release({httpsOk: true}); await flush();
     assert.deepEqual(h.state.cleared, []); assert.equal(h.state.error, 'DNS warning'); h.cleanup();
   }
+});
+
+test('the healthy Android watchdog keeps the active placement policy warm', async () => {
+  const h = harness();
+  await flush();
+  h.state.healthy = true;
+  h.record({state: 'connected'});
+  h.render({sessionUserId: 'fixture-user'});
+  await flush();
+  const [[user, token, , profile]] = h.state.policyPreparations;
+  assert.equal(user, 'fixture-user');
+  assert.equal(token, h.input.sessionAccessToken);
+  assert.equal(profile, h.input.activeProfile);
+  h.record({state: 'error'});
+  h.poll();
+  await flush();
+  assert.equal(h.state.policyPreparations.length, 1);
+  h.cleanup();
 });

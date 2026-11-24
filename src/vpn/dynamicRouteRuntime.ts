@@ -15,8 +15,9 @@ class DynamicRouteRuntime {
   private policyFetch: Promise<void> | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private lastFetchAt = 0;
+  private lastFetchPlacement = '';
 
-  async prepare(userId: string, accessToken: string, sessionIsCurrent?: () => boolean): Promise<void> {
+  async prepare(userId: string, accessToken: string, sessionIsCurrent?: () => boolean, profile?: VpnProfile): Promise<void> {
     if (!userId || !accessToken || sessionIsCurrent?.() === false) return;
     if (this.owner !== userId || this.accessToken !== accessToken || this.sessionIsCurrent?.() === false) {
       this.owner = userId;
@@ -26,6 +27,7 @@ class DynamicRouteRuntime {
       this.engine = new DynamicRouteEngine();
       this.policyFetch = null;
       this.lastFetchAt = 0;
+      this.lastFetchPlacement = '';
       // Foreground preparation and Connect must share this read. Otherwise a
       // late cache read can replace a newer policy or its route health state.
       this.hydration = SecureStore.getItemAsync(storageKey).catch(() => null).then((raw) => {
@@ -46,8 +48,21 @@ class DynamicRouteRuntime {
     const generation = this.generation;
     const current = () => generation === this.generation && sessionIsCurrent?.() !== false;
     await this.hydration;
-    if (!current() || this.engine.hasPolicy() || this.policyFetch || Date.now() - this.lastFetchAt < 30_000) return;
+    if (!current() || this.engine.hasPolicyFor(profile)) return;
+    const placement = profile?.device?.id
+      ? JSON.stringify([profile.device.id, profile.locationId, profile.device.nodeId])
+      : '';
+    if ((!placement || placement === this.lastFetchPlacement) && Date.now() - this.lastFetchAt < 30_000) return;
+    if (this.policyFetch) {
+      if (placement && placement !== this.lastFetchPlacement) {
+        void this.policyFetch.then(() => {
+          if (current()) return this.prepare(userId, accessToken, sessionIsCurrent, profile);
+        }).catch(() => undefined);
+      }
+      return;
+    }
     this.lastFetchAt = Date.now();
+    this.lastFetchPlacement = placement;
     // The signed profile remains usable when this optional request is slow or
     // unavailable. Only local hydration belongs on the connection path.
     const fetch = this.refreshPolicy(accessToken, current);

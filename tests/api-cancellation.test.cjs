@@ -692,6 +692,17 @@ test('web without local native keys keeps server-generated legacy config without
   assert.equal(calls.some(call=>call==='POST /v1/devices/register'||call==='GET /v1/vpn/profile'),false);
 });
 
+test('a managed profile renders a valid server MTU and keeps the legacy default', () => {
+  const { managedProfileConfig } = harness({platform: 'android'}).load('@/api/vpn');
+  const unrendered = {
+    assigned_ipv4: '10.0.0.2/32', server: '192.0.2.1', port: 51825, server_public_key: 'fixture',
+  };
+  assert.match(managedProfileConfig({...unrendered, mtu: 1280}, pair), /^MTU = 1280$/m);
+  for (const mtu of [undefined, 0, 1279, 1280.5, 65536, '1280']) {
+    assert.match(managedProfileConfig({...unrendered, mtu}, pair), /^MTU = 1360$/m);
+  }
+});
+
 test('web keeps a successful managed profile even when no local native key exists', async () => {
   const calls=[];
   const h=harness({adapters:{'@/native/vexVpn':{supportsNativeRoutingPolicy:()=>false,getOrCreateWireGuardKeyPair:async()=>null}},fetch:async(url,init)=>{

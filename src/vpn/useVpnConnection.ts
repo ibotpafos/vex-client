@@ -1214,6 +1214,7 @@ export function useVpnConnection() {
     rotateProfile: rotateActiveProfile,
     serverSelectionMode,
     sessionAccessToken: session?.accessToken,
+    sessionUserId: session?.user.id,
     setCachedProfile: cacheProfile,
     staleHandshakeSeconds: staleHandshakeReconnectSeconds,
     submitDiagnostics: submitVpnDiagnostics,

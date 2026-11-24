@@ -1,4 +1,4 @@
-import { connectionAttemptsForProfile, profileEndpoint, profileWithEndpoint } from './connectionFallback';
+import { connectionAttemptsForProfile, isAWG3Profile, profileEndpoint, profileWithEndpoint } from './connectionFallback';
 import type { VpnProfile } from './profile';
 
 export type DynamicRouteCandidate = {
@@ -28,6 +28,8 @@ export type DynamicRoutePolicy = {
   };
   candidates: DynamicRouteCandidate[];
 };
+
+const policyRenewalLeadMs = 60_000;
 
 type RouteState = {
   failures: number;
@@ -100,6 +102,11 @@ export class DynamicRouteEngine {
 
   hasPolicy(nowMs = Date.now()): boolean {
     return !!this.policy && unexpired(this.policy.expiresAt, nowMs);
+  }
+
+  hasPolicyFor(profile?: VpnProfile, nowMs = Date.now()): boolean {
+    if (!profile?.device?.id || !isAWG3Profile(profile)) return this.hasPolicy(nowMs);
+    return this.eligibleCandidates(profile, nowMs + policyRenewalLeadMs).length > 0;
   }
 
   restore(snapshot: DynamicRouteSnapshot, nowMs = Date.now()): void {
@@ -217,7 +224,7 @@ export class DynamicRouteEngine {
     // The route policy only describes AWG3 listeners. Never apply it to an
     // older AWG profile, even when the device id and location happen to match.
     if (!this.policy || !unexpired(this.policy.expiresAt, nowMs) || !profile.device?.id ||
-        !/^HeaderProtectionKey\s*=\s*\S+/m.test(profile.config)) return [];
+        !isAWG3Profile(profile)) return [];
     // Old hot profiles can contain pre-placement device metadata. Only use its
     // node restriction when it describes the endpoint in the native config.
     const nodeId = profile.device.endpoint && profile.device.endpoint.trim() !== profileEndpoint(profile)

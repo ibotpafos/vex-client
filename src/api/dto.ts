@@ -133,7 +133,7 @@ export type NativeVPNProfileDTO = Omit<WireProjection<
   NativeVPNProfileDTOSpec,
   'version' | 'revoked' | 'rotation_required',
   'unchanged' | 'device_id' | 'client_public_key' | 'client_key_epoch' | 'protocol' | 'server'
-  | 'port' | 'server_public_key' | 'preshared_key' | 'assigned_ipv4' | 'dns' | 'allowed_ips'
+  | 'port' | 'server_public_key' | 'preshared_key' | 'assigned_ipv4' | 'dns' | 'allowed_ips' | 'mtu'
   | 'bypass_ranges' | 'bypass_domains' | 'routing_policy_version' | 'expires_at' | 'authorization'
   | 'amnezia' | 'amnezia_version' | 'config'
 >, 'amnezia'> & {

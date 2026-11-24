@@ -138,7 +138,7 @@ test('portrait appearance and existing disabled/busy semantics are preserved',()
 for(const state of [{session:null,isLoading:false},{session:{user:{id:'fixture'}},isLoading:false},{session:null,isLoading:true}]){
  test(`actual root preserves auth/callback/protected routes (session=${!!state.session}, loading=${state.isLoading})`,()=>{
   const tree=expand(fixture(state).load('app/_layout.tsx').default());const names=nodes(tree).filter(x=>x.tree.type==='Screen').map(x=>x.tree.props.name);
-  if(state.isLoading)assert.deepEqual(names,[]);else assert.deepEqual(names,['index','auth/callback',state.session?'(app)':'sign-in']);
+  if(state.isLoading)assert.deepEqual(names,[]);else assert.deepEqual(names,['index','open','auth/callback',state.session?'(app)':'sign-in']);
  });
 }
 test('actual root recovery retry remains reachable through a scroll container',()=>{

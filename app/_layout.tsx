@@ -183,6 +183,7 @@ function RootNavigator() {
         <View style={styles.root}>
           <Stack>
             <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="open" options={{ headerShown: false }} />
             <Stack.Screen
               name="auth/callback"
               options={{ headerShown: false }}

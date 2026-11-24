@@ -76,6 +76,12 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
           data: [{ scheme: appScheme, host: 'auth', pathPrefix: '/callback' }],
           category: ['BROWSABLE', 'DEFAULT'],
         },
+        {
+          action: 'VIEW',
+          autoVerify: false,
+          data: [{ scheme: appScheme, host: 'open' }],
+          category: ['BROWSABLE', 'DEFAULT'],
+        },
       ],
     },
     plugins: [

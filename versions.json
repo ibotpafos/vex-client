@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.94",
+    "version": "1.0.95",
     "build": 1,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Улучшили работу управляемых VPN-профилей: приложение учитывает MTU сервера и обновляет резервные маршруты Android при продлении профиля.",
+    "release_notes": "Ускорили переход из личного кабинета в VEX. Приложение учитывает MTU сервера и обновляет резервные маршруты Android при продлении VPN-профиля.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

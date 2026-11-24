@@ -82,6 +82,9 @@ test('Android native orientation/back settings agree with real Expo config and r
   assert.equal(activity.$['android:launchMode'],'singleTask');
   const auth=activity['intent-filter'].flatMap(x=>x.data??[]).find(x=>x.$['android:host']==='auth');
   assert.deepEqual(auth.$,{'android:scheme':'vexguard','android:host':'auth','android:pathPrefix':'/callback'});
+  const open=activity['intent-filter'].find(x=>(x.data??[]).some(d=>d.$['android:host']==='open'));
+  assert.deepEqual(open.data.map(d=>d.$),[{'android:scheme':'vexguard','android:host':'open'}]);
+  assert.deepEqual(config.android.intentFilters.find(x=>x.data.some(d=>d.host==='open')).data,[{scheme:'vexguard',host:'open'}]);
   const systemVpn=(application.service??[]).filter(s=>(s['intent-filter']??[]).some(x=>(x.action??[]).some(a=>a.$['android:name']==='android.net.VpnService')));
   assert.deepEqual(systemVpn.map(x=>x.$['android:name']),['.vpn.VexBootProtectionService']);
 });

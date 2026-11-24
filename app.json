@@ -3,7 +3,7 @@
     "name": "VEX",
     "slug": "vex",
     "scheme": "vexguard",
-    "version": "1.0.94",
+    "version": "1.0.95",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -29,7 +29,7 @@
       },
       "predictiveBackGestureEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 1009401,
+      "versionCode": 1009501,
       "package": "com.vexguard.app",
       "intentFilters": [
         {
@@ -40,6 +40,20 @@
               "scheme": "vexguard",
               "host": "auth",
               "pathPrefix": "/callback"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "vexguard",
+              "host": "open"
             }
           ],
           "category": [

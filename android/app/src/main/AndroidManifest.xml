@@ -45,6 +45,12 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="vexguard" android:host="auth" android:pathPrefix="/callback"/>
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="vexguard" android:host="open"/>
+      </intent-filter>
     </activity>
     <service android:name="org.amnezia.awg.backend.GoBackend$VpnService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
       <!-- Started explicitly by GoBackend. Only the offline boot service may

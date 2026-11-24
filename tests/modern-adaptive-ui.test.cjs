@@ -82,6 +82,9 @@ test('Android native orientation/back settings agree with real Expo config and r
   assert.equal(activity.$['android:launchMode'],'singleTask');
   const auth=activity['intent-filter'].flatMap(x=>x.data??[]).find(x=>x.$['android:host']==='auth');
   assert.deepEqual(auth.$,{'android:scheme':'vexguard','android:host':'auth','android:pathPrefix':'/callback'});
+  const open=activity['intent-filter'].find(x=>(x.data??[]).some(d=>d.$['android:host']==='open'));
+  assert.deepEqual(open.data.map(d=>d.$),[{'android:scheme':'vexguard','android:host':'open'}]);
+  assert.deepEqual(config.android.intentFilters.find(x=>x.data.some(d=>d.host==='open')).data,[{scheme:'vexguard',host:'open'}]);
   const systemVpn=(application.service??[]).filter(s=>(s['intent-filter']??[]).some(x=>(x.action??[]).some(a=>a.$['android:name']==='android.net.VpnService')));
   assert.deepEqual(systemVpn.map(x=>x.$['android:name']),['.vpn.VexBootProtectionService']);
 });
@@ -135,7 +138,7 @@ test('portrait appearance and existing disabled/busy semantics are preserved',()
 for(const state of [{session:null,isLoading:false},{session:{user:{id:'fixture'}},isLoading:false},{session:null,isLoading:true}]){
  test(`actual root preserves auth/callback/protected routes (session=${!!state.session}, loading=${state.isLoading})`,()=>{
   const tree=expand(fixture(state).load('app/_layout.tsx').default());const names=nodes(tree).filter(x=>x.tree.type==='Screen').map(x=>x.tree.props.name);
-  if(state.isLoading)assert.deepEqual(names,[]);else assert.deepEqual(names,['index','auth/callback',state.session?'(app)':'sign-in']);
+  if(state.isLoading)assert.deepEqual(names,[]);else assert.deepEqual(names,['index','open','auth/callback',state.session?'(app)':'sign-in']);
  });
 }
 test('actual root recovery retry remains reachable through a scroll container',()=>{

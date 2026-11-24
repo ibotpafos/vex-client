@@ -7,6 +7,14 @@ const read = name => readFileSync(path.join(root, name), 'utf8');
 const manifest = JSON.parse(read('package.json'));
 const lock = JSON.parse(read('package-lock.json'));
 
+test('iOS lock follows the locked Expo and React Native versions', () => {
+  const pods = read('ios/Podfile.lock');
+  for (const [pod, dependency] of [['Expo', 'expo'], ['ReactNativeDependencies', 'react-native']]) {
+    const version = pods.match(new RegExp(`^  - ${pod} \\(([^)]+)\\):?$`, 'm'))?.[1];
+    assert.equal(version, lock.packages[`node_modules/${dependency}`].version, pod);
+  }
+});
+
 test('SDK 58 dependencies resolve to the Expo compatibility matrix', () => {
   const expected = require('../node_modules/expo/bundledNativeModules.json');
   const semver = require('semver');

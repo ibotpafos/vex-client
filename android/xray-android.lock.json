@@ -1,12 +1,15 @@
 {
   "schema_version": 1,
-  "version": "v26.10.31",
-  "source_commit": "7fe8528063e54343af8ba9a37431afc56000de21",
-  "url": "https://github.com/XTLS/libXray/releases/download/v26.10.31/libxray-android.zip",
-  "archive_bytes": 52277046,
-  "archive_sha256": "fb99f04acf379cc2957c1e1d0ce2b3c0005d3f49974a44c09a11242a0562c1ca",
-  "aar_sha256": "4c90532f61ff8363e7fcf52e064ff1aa66d065e06afbadc0ea4c6acf384c452f",
+  "version": "v26.11.9-vex.1",
+  "source_commit": "5a0f7d8d1c28b34afb5727b04b26a10f6dbac7e3",
+  "url": "https://github.com/ibotpafos/vex-client/releases/download/libxray-v26.11.9-vex.1/libxray-android-v26.11.9-vex.1.zip",
+  "archive_bytes": 25325325,
+  "archive_sha256": "a1b21cecdd76784dcf6b773eabeabb6f73c5b827164a32c36cab3f17eb18a500",
+  "aar_sha256": "e23274cd660e0fda71d9ac53d14a0c297fb194b0a7b490f2cfef985fef31d680",
   "sources_sha256": "14641c3977eee0e7ce9c2e1bf2d3399c0158f11a1a500b4ba9b9d5d651c1a9dc",
-  "required_abis": ["arm64-v8a", "armeabi-v7a"],
+  "required_abis": [
+    "arm64-v8a",
+    "armeabi-v7a"
+  ],
   "minimum_load_alignment": 16384
 }
